@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tools/runner/run_86box.sh
-# Automated headless launcher for 86Box v4.x MS-DOS 6.22 integration & oracle tests.
+# Automated launcher for 86Box v4.x/v5.x MS-DOS 6.22 integration & oracle tests.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,8 +8,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MODE="client"
 BAUD="115200"
-SERIAL_CLIENT="/dev/ttyS0"
-SERIAL_SERVER="/dev/ttyS1"
+SERIAL_CLIENT=""
+SERIAL_SERVER=""
 WORKDIR="${REPO_ROOT}/build/86box_run"
 CLIENT_VHD=""
 SERVER_VHD=""
@@ -24,21 +24,21 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Launch 86Box v4.x in headless mode for INTERLNK/INTERSVR ground-truth tracing
-or Differential Oracle integration testing.
+Launch 86Box for INTERLNK/INTERSVR ground-truth tracing or Differential Oracle
+integration testing.
 
 Options:
   --mode <client|server|dual|oracle>  Execution topology (default: client)
   --baud <rate>                       Target COM1 baud rate (default: 115200)
-  --serial-client <device>            Serial device/PTY for Client VM (default: /dev/ttyS0)
-  --serial-server <device>            Serial device/PTY for Server VM (default: /dev/ttyS1)
+  --serial-client <device>            Optional host serial/PTY path for Client COM1 passthrough
+  --serial-server <device>            Optional host serial/PTY path for Server COM1 passthrough
   --client-vhd <path>                 MS-DOS 6.22 Client VHD image path
   --server-vhd <path>                 MS-DOS 6.22 Server VHD image path
   --client-floppy <path>              Optional 1.44M floppy image for Client VM (A:)
   --server-floppy <path>              Optional 1.44M floppy image for Server VM (A:)
   --roms <dir>                        86Box ROM directory (or set EIGHTYSIXBOX_ROMS)
   --workdir <dir>                     Runtime working directory (default: build/86box_run)
-  --gui                               Disable headless flags (show 86Box window)
+  --gui                               Show 86Box GUI window (always used on macOS cocoa)
   --generate-config                   Only render runtime 86Box .cfg files and exit
   --dry-run                           Print planned commands without launching 86Box
   -h, --help                          Show this help message
@@ -89,7 +89,7 @@ render_config() {
     local floppy_path="$5"
 
     mkdir -p "$(dirname "$output_cfg")"
-    sed "s|^serial1_device = .*|serial1_device = ${serial_dev}|" "$template" > "$output_cfg"
+    cp "$template" "$output_cfg"
 
     if [[ -n "$floppy_path" ]]; then
         printf "fdd_01_fn = %s\n" "$floppy_path" >> "$output_cfg"
@@ -101,8 +101,30 @@ render_config() {
 [Hard disks]
 hdd_01_parameters = 17, 4, 306, 0, xta
 hdd_01_fn = ${vhd_path}
-hdd_01_speed = ramdisk
-hdd_01_xta_channel = 0:0
+hdd_01_xta_channel = 0
+EOF
+    fi
+
+    if [[ -n "$serial_dev" ]]; then
+        # Enable serial1 passthrough in [Ports (COM & LPT)] and append device block
+        awk '
+            /^serial1_enabled = 1$/ {
+                print
+                print "serial1_passthrough_enabled = 1"
+                next
+            }
+            { print }
+        ' "$output_cfg" > "${output_cfg}.tmp" && mv "${output_cfg}.tmp" "$output_cfg"
+
+        cat >> "$output_cfg" <<EOF
+
+[Serial Passthrough Device #1]
+mode = 3
+host_serial_path = ${serial_dev}
+baudrate = ${BAUD}
+data_bits = 8
+stop_bits = 1
+parity = 0
 EOF
     fi
 }
@@ -116,8 +138,8 @@ render_config "${SCRIPT_DIR}/configs/client_86box.cfg" "$CLIENT_CFG" "$SERIAL_CL
 render_config "${SCRIPT_DIR}/configs/server_86box.cfg" "$SERVER_CFG" "$SERIAL_SERVER" "$SERVER_VHD" "$SERVER_FLOPPY"
 
 echo "[run_86box] Mode=${MODE} Baud=${BAUD} Workdir=${WORKDIR}"
-echo "[run_86box] Rendered Client CFG: ${CLIENT_CFG} (serial1=${SERIAL_CLIENT})"
-echo "[run_86box] Rendered Server CFG: ${SERVER_CFG} (serial1=${SERIAL_SERVER})"
+echo "[run_86box] Rendered Client CFG: ${CLIENT_CFG} (serial1=${SERIAL_CLIENT:-none})"
+echo "[run_86box] Rendered Server CFG: ${SERVER_CFG} (serial1=${SERIAL_SERVER:-none})"
 
 if [[ "$GENERATE_CONFIG_ONLY" -eq 1 ]]; then
     exit 0
@@ -129,23 +151,22 @@ if [[ -z "$EIGHTYSIXBOX_BIN" ]]; then
         EIGHTYSIXBOX_BIN="86Box"
     else
         echo "[run_86box] ERROR: 86Box binary not found in PATH, ~/Applications/86Box.app, or /Applications/86Box.app." >&2
-        echo "[run_86box] Install 86Box v4.x or run with --dry-run / --generate-config." >&2
+        echo "[run_86box] Install 86Box or run with --dry-run / --generate-config." >&2
         exit 1
     fi
 fi
 
 EXTRA_ARGS=()
 if [[ -n "$ROM_PATH" ]]; then
-    EXTRA_ARGS+=("--rompath" "$ROM_PATH")
+    EXTRA_ARGS+=("-R" "$ROM_PATH")
 fi
 
 launch_vm() {
     local role="$1"
     local vm_dir="$2"
-    local vm_cfg="$3"
-    local cmd=("$EIGHTYSIXBOX_BIN" "--vmpath" "$vm_dir" "--config" "$vm_cfg" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
+    local cmd=("$EIGHTYSIXBOX_BIN" "-N" "-P" "$vm_dir" "-V" "OpenLNK-${role}" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
-    if [[ "$HEADLESS" -eq 1 ]]; then
+    if [[ "$HEADLESS" -eq 1 && "$(uname -s)" != "Darwin" ]]; then
         echo "[run_86box] Launching ${role} VM (headless): QT_QPA_PLATFORM=offscreen ${cmd[*]}"
         if [[ "$DRY_RUN" -eq 0 ]]; then
             QT_QPA_PLATFORM=offscreen "${cmd[@]}" &
@@ -160,19 +181,19 @@ launch_vm() {
 
 case "$MODE" in
     client)
-        launch_vm "CLIENT" "${WORKDIR}/client" "$CLIENT_CFG"
+        launch_vm "CLIENT" "${WORKDIR}/client"
         ;;
     server)
-        launch_vm "SERVER" "${WORKDIR}/server" "$SERVER_CFG"
+        launch_vm "SERVER" "${WORKDIR}/server"
         ;;
     dual)
-        launch_vm "SERVER" "${WORKDIR}/server" "$SERVER_CFG"
-        launch_vm "CLIENT" "${WORKDIR}/client" "$CLIENT_CFG"
+        launch_vm "SERVER" "${WORKDIR}/server"
+        launch_vm "CLIENT" "${WORKDIR}/client"
         ;;
     oracle)
         echo "[run_86box] Differential Oracle mode: MS-DOS Client VM <-> cleanroom opensvr"
-        launch_vm "CLIENT" "${WORKDIR}/client" "$CLIENT_CFG"
-        echo "[run_86box] Connect opensvr to peer PTY of ${SERIAL_CLIENT} at ${BAUD} bps."
+        launch_vm "CLIENT" "${WORKDIR}/client"
+        echo "[run_86box] Connect opensvr to peer PTY of ${SERIAL_CLIENT:-<pty>} at ${BAUD} bps."
         ;;
     *)
         echo "[run_86box] ERROR: Unknown mode '${MODE}'. Expected client|server|dual|oracle." >&2
