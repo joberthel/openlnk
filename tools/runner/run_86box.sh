@@ -13,6 +13,8 @@ SERIAL_SERVER="/dev/ttyS1"
 WORKDIR="${REPO_ROOT}/build/86box_run"
 CLIENT_VHD=""
 SERVER_VHD=""
+CLIENT_FLOPPY=""
+SERVER_FLOPPY=""
 ROM_PATH="${EIGHTYSIXBOX_ROMS:-}"
 DRY_RUN=0
 GENERATE_CONFIG_ONLY=0
@@ -32,6 +34,8 @@ Options:
   --serial-server <device>            Serial device/PTY for Server VM (default: /dev/ttyS1)
   --client-vhd <path>                 MS-DOS 6.22 Client VHD image path
   --server-vhd <path>                 MS-DOS 6.22 Server VHD image path
+  --client-floppy <path>              Optional 1.44M floppy image for Client VM (A:)
+  --server-floppy <path>              Optional 1.44M floppy image for Server VM (A:)
   --roms <dir>                        86Box ROM directory (or set EIGHTYSIXBOX_ROMS)
   --workdir <dir>                     Runtime working directory (default: build/86box_run)
   --gui                               Disable headless flags (show 86Box window)
@@ -49,6 +53,8 @@ while [[ $# -gt 0 ]]; do
         --serial-server) SERIAL_SERVER="$2"; shift 2 ;;
         --client-vhd) CLIENT_VHD="$2"; shift 2 ;;
         --server-vhd) SERVER_VHD="$2"; shift 2 ;;
+        --client-floppy) CLIENT_FLOPPY="$2"; shift 2 ;;
+        --server-floppy) SERVER_FLOPPY="$2"; shift 2 ;;
         --roms) ROM_PATH="$2"; shift 2 ;;
         --workdir) WORKDIR="$2"; shift 2 ;;
         --gui) HEADLESS=0; shift ;;
@@ -76,9 +82,14 @@ render_config() {
     local output_cfg="$2"
     local serial_dev="$3"
     local vhd_path="$4"
+    local floppy_path="$5"
 
     mkdir -p "$(dirname "$output_cfg")"
     sed "s|^serial1_device = .*|serial1_device = ${serial_dev}|" "$template" > "$output_cfg"
+
+    if [[ -n "$floppy_path" ]]; then
+        printf "fdd_01_fn = %s\n" "$floppy_path" >> "$output_cfg"
+    fi
 
     if [[ -n "$vhd_path" ]]; then
         cat >> "$output_cfg" <<EOF
@@ -97,8 +108,8 @@ mkdir -p "${WORKDIR}/client" "${WORKDIR}/server"
 CLIENT_CFG="${WORKDIR}/client/86box.cfg"
 SERVER_CFG="${WORKDIR}/server/86box.cfg"
 
-render_config "${SCRIPT_DIR}/configs/client_86box.cfg" "$CLIENT_CFG" "$SERIAL_CLIENT" "$CLIENT_VHD"
-render_config "${SCRIPT_DIR}/configs/server_86box.cfg" "$SERVER_CFG" "$SERIAL_SERVER" "$SERVER_VHD"
+render_config "${SCRIPT_DIR}/configs/client_86box.cfg" "$CLIENT_CFG" "$SERIAL_CLIENT" "$CLIENT_VHD" "$CLIENT_FLOPPY"
+render_config "${SCRIPT_DIR}/configs/server_86box.cfg" "$SERVER_CFG" "$SERIAL_SERVER" "$SERVER_VHD" "$SERVER_FLOPPY"
 
 echo "[run_86box] Mode=${MODE} Baud=${BAUD} Workdir=${WORKDIR}"
 echo "[run_86box] Rendered Client CFG: ${CLIENT_CFG} (serial1=${SERIAL_CLIENT})"
