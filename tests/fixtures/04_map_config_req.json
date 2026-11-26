@@ -1,0 +1,29 @@
+{
+  "test_case": "OP01_MAP_CONFIG_REQ_DOS622",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_map_config_req",
+  "raw_hex": "832401010016060403fffefefefefefefefefefefefefefefefefefefefefefefefefefefefe3e20",
+  "parsed_expected": {
+    "header": 131,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 3,
+    "len_payload": 36,
+    "crc16": 15904,
+    "payload": {
+      "opcode": 1,
+      "client_proto_ver": 1,
+      "client_dos_minor": 22,
+      "client_dos_major": 6,
+      "max_client_drives": 4,
+      "first_client_drive": 3,
+      "lpt_map_req": [
+        255,
+        254,
+        254
+      ]
+    }
+  }
+}

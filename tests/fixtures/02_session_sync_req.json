@@ -1,0 +1,25 @@
+{
+  "test_case": "OP00_SESSION_SYNC_REQ_115200",
+  "source_trace": "tests/traces/02_handshake_115200.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_session_sync_req",
+  "raw_hex": "81220000000000000001010000010020000000000000000000000000f7af37ad00000000726d",
+  "parsed_expected": {
+    "header": 129,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 1,
+    "len_payload": 34,
+    "crc16": 29293,
+    "payload": {
+      "client_version": 256,
+      "proto_major": 1,
+      "ext_info_flag": 0,
+      "capability": 1,
+      "max_block_size": 8192,
+      "client_id": 2906107895,
+      "server_id": 0
+    }
+  }
+}

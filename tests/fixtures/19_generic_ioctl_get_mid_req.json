@@ -1,0 +1,22 @@
+{
+  "test_case": "OP1D_GENERIC_IOCTL_GET_MEDIA_ID_REQ",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_generic_ioctl_req",
+  "raw_hex": "82041d020866ae7d",
+  "parsed_expected": {
+    "header": 130,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 2,
+    "len_payload": 4,
+    "crc16": 44669,
+    "payload": {
+      "opcode": 29,
+      "unit": 2,
+      "category": 8,
+      "function": 102
+    }
+  }
+}

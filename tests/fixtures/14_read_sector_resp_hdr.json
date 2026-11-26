@@ -1,0 +1,21 @@
+{
+  "test_case": "OP04_READ_SECTOR_RESP_HEADER",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_sector_io_resp",
+  "raw_hex": "80040001010063f4",
+  "parsed_expected": {
+    "header": 128,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 0,
+    "len_payload": 4,
+    "crc16": 25588,
+    "payload": {
+      "status": 256,
+      "is_error": false,
+      "sectors_transferred": 1
+    }
+  }
+}

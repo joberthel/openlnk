@@ -1,0 +1,20 @@
+{
+  "test_case": "OP1C_GET_DRIVE_INFO_RESP_C_10MB",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_get_drive_info_resp",
+  "raw_hex": "82172831304d62290000000041202020202020200000000000eb48",
+  "parsed_expected": {
+    "header": 130,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 2,
+    "len_payload": 23,
+    "crc16": 60232,
+    "payload": {
+      "size_string_ascii": "(10Mb)",
+      "volume_label_ascii": "A       "
+    }
+  }
+}

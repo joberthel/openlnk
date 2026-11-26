@@ -1,0 +1,23 @@
+{
+  "test_case": "OP02_MEDIA_CHECK_UNCHANGED_FLOPPY",
+  "source_trace": "tests/traces/07_media_change_error.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_media_check_resp",
+  "raw_hex": "80130001014449534b5f41000000000000251ecafa8c50",
+  "parsed_expected": {
+    "header": 128,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 0,
+    "len_payload": 19,
+    "crc16": 35920,
+    "payload": {
+      "status": 256,
+      "is_error": false,
+      "media_status": 1,
+      "volume_label_ascii": "DISK_A",
+      "volume_serial": 4207549989
+    }
+  }
+}

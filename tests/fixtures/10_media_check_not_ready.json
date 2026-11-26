@@ -1,0 +1,24 @@
+{
+  "test_case": "OP02_MEDIA_CHECK_ERR_DRIVE_NOT_READY",
+  "source_trace": "tests/traces/07_media_change_error.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_media_check_resp",
+  "raw_hex": "82130281004449534b5f42000000000000251e01417356",
+  "parsed_expected": {
+    "header": 130,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 2,
+    "len_payload": 19,
+    "crc16": 29526,
+    "payload": {
+      "status": 33026,
+      "is_error": true,
+      "error_code": 2,
+      "media_status": 0,
+      "volume_label_ascii": "DISK_B",
+      "volume_serial": 1090592293
+    }
+  }
+}

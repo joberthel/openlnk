@@ -1,0 +1,22 @@
+{
+  "test_case": "OP1D_GENERIC_IOCTL_MEDIA_ID_FAT16",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_generic_ioctl_mid",
+  "raw_hex": "80191d60f81c6629444f533632325f434c49204641543136202020f592",
+  "parsed_expected": {
+    "header": 128,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 0,
+    "len_payload": 25,
+    "crc16": 62866,
+    "payload": {
+      "info_level": 24605,
+      "serial_number": 694557944,
+      "volume_label_ascii": "DOS622_CLI ",
+      "filesystem_type_ascii": "FAT16   "
+    }
+  }
+}

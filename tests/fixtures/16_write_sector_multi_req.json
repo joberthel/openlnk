@@ -1,0 +1,25 @@
+{
+  "test_case": "OP05_WRITE_SECTORS_16KB_REQ",
+  "source_trace": "tests/traces/06_write_sector_multi.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_sector_io_req",
+  "raw_hex": "810b0502f82000ffff5f010000ecbe",
+  "parsed_expected": {
+    "header": 129,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 1,
+    "len_payload": 11,
+    "crc16": 60606,
+    "payload": {
+      "opcode": 5,
+      "unit": 2,
+      "media_descriptor": 248,
+      "sector_count": 32,
+      "start_sector_16": 65535,
+      "start_sector_32": 351,
+      "effective_start_sector": 351
+    }
+  }
+}

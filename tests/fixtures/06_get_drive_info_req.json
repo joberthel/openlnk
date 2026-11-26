@@ -1,0 +1,20 @@
+{
+  "test_case": "OP1C_GET_DRIVE_INFO_REQ_C",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_get_drive_info_req",
+  "raw_hex": "81021c023b5f",
+  "parsed_expected": {
+    "header": 129,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 1,
+    "len_payload": 2,
+    "crc16": 15199,
+    "payload": {
+      "opcode": 28,
+      "unit": 2
+    }
+  }
+}

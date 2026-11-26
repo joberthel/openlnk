@@ -1,5 +1,0 @@
-{
-  "test_case": "FAULT_INJECTION_CHECKSUM_MISMATCH",
-  "raw_hex": "55aa02020700000100000001000c6c",
-  "expected_error": "CHECKSUM_MISMATCH"
-}

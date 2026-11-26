@@ -1,0 +1,20 @@
+{
+  "test_case": "OP00_SESSION_SYNC_TRIGGER",
+  "source_trace": "tests/traces/02_handshake_115200.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_sync_trigger",
+  "raw_hex": "800200005d03",
+  "parsed_expected": {
+    "header": 128,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 0,
+    "len_payload": 2,
+    "crc16": 23811,
+    "payload": {
+      "opcode": 0,
+      "subcode": 0
+    }
+  }
+}

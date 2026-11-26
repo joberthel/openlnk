@@ -1,0 +1,8 @@
+{
+  "test_case": "FAULT_INJECTION_TRUNCATED_512B_FRAME",
+  "source_trace": "derived:04_bpb_query_fat16.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "raw_data",
+  "raw_hex": "010002494f2020202020205359530700000000000000000000c032bf1c0200469f00004d53444f532020205359530700000000000000000000c032bf1c3100fa",
+  "expected_error": "INVALID_FRAME"
+}

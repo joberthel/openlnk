@@ -1,0 +1,8 @@
+{
+  "test_case": "FAULT_INJECTION_CRC16_GENIBUS_MISMATCH",
+  "source_trace": "derived:04_bpb_query_fat16.hexlog.gz",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_sector_io_req",
+  "raw_hex": "830b0402f80100ffff53000000704f",
+  "expected_error": "CHECKSUM_MISMATCH"
+}

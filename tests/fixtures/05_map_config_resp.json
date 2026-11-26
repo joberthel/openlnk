@@ -1,0 +1,40 @@
+{
+  "test_case": "OP01_MAP_CONFIG_RESP_DRIVES_A_C",
+  "source_trace": "tests/traces/07_media_change_error.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_map_config_resp",
+  "raw_hex": "8057010a160603ff00ff0002fefefefefefefefefefefefefefefefefefefefefefefefec208c208c20800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000563",
+  "parsed_expected": {
+    "header": 128,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 0,
+    "len_payload": 87,
+    "crc16": 1379,
+    "payload": {
+      "server_proto_major": 1,
+      "server_proto_minor": 10,
+      "server_dos_minor": 22,
+      "server_dos_major": 6,
+      "server_drive_count": 3,
+      "lpt_map_resp": [
+        255,
+        0,
+        255
+      ],
+      "drive_map_resp_first4": [
+        0,
+        2,
+        254,
+        254
+      ],
+      "server_drive_attrs_first3": [
+        2242,
+        2242,
+        2242
+      ],
+      "server_flags": 0
+    }
+  }
+}

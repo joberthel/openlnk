@@ -1,0 +1,32 @@
+{
+  "test_case": "OP03_BUILD_BPB_FAT16_10MB",
+  "source_trace": "tests/traces/04_bpb_query_fat16.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "msg_build_bpb_resp",
+  "raw_hex": "8221020100020201000200023751f829001100060011000000000000004000000521005541",
+  "parsed_expected": {
+    "header": 130,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 2,
+    "len_payload": 33,
+    "crc16": 21825,
+    "payload": {
+      "status": 258,
+      "is_error": false,
+      "bytes_per_sector": 512,
+      "sectors_per_cluster": 2,
+      "reserved_sectors": 1,
+      "num_fats": 2,
+      "root_entries": 512,
+      "total_sectors_16": 20791,
+      "media_descriptor": 248,
+      "sectors_per_fat": 41,
+      "sectors_per_track": 17,
+      "num_heads": 6,
+      "hidden_sectors": 17,
+      "total_sectors_32": 0
+    }
+  }
+}

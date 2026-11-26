@@ -1,0 +1,24 @@
+{
+  "test_case": "RCOPY_FXB_OPEN_INTERSVR_EXE",
+  "source_trace": "tests/traces/03_rcopy_bootstrap.hexlog.gz",
+  "direction": "SERVER->CLIENT",
+  "payload_type": "fxb_payload",
+  "raw_hex": "81b701526563656976696e6720494e5445525356522e455845202833373432362920202030250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004572726f72206372656174696e672066696c6520494e5445525356522e4558452e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020cba97a5d32920000494e5445525356522e455845000fa5",
+  "parsed_expected": {
+    "header": 129,
+    "is_short_len": true,
+    "more_fragments": false,
+    "echo_request": false,
+    "sequence_number": 1,
+    "len_payload": 183,
+    "crc16": 4005,
+    "payload": {
+      "fxb_op": 1,
+      "file_attr": 32,
+      "dos_time": 43467,
+      "dos_date": 23930,
+      "file_size": 37426,
+      "filename_ascii": "INTERSVR.EXE"
+    }
+  }
+}

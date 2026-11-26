@@ -1,0 +1,8 @@
+{
+  "test_case": "FAULT_INJECTION_RESERVED_HEADER_BITS",
+  "source_trace": "synthetic",
+  "direction": "CLIENT->SERVER",
+  "payload_type": "msg_sync_trigger",
+  "raw_hex": "980200005d03",
+  "expected_error": "INVALID_FRAME"
+}
