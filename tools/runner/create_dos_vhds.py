@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
-"""Create 86Box-compatible Fixed-Size MS-DOS 6.22 Client & Server VHDs from an ISO.
+"""Create 86Box-compatible Fixed-Size MS-DOS 6.22 Client & Server VHDs.
 
 Builds:
-  1. dos622_boot.img   - Extracted El Torito 1.44 MB boot floppy (for FDISK /MBR + SYS C:)
-  2. dos622_client.vhd - Fixed-size 10 MB FAT16 VHD (CHS 306/4/17 for xta_wdxt150)
-                         with 8088/NEC-V30-safe CONFIG.SYS boot menu & DOS utilities
-  3. dos622_server.vhd - Fixed-size 10 MB FAT16 VHD (CHS 306/4/17) with DOS utilities,
-                         AUTOEXEC.BAT, and deterministic C:\\TEST.DAT verification file
+  - dos622_boot.img   - Extracted El Torito 1.44 MB boot floppy (direct A:\\> for FDISK /MBR + SYS C:)
+  - dos622_client.vhd - 10 MB Fixed-Size FAT16 VHD (CHS 306/4/17 for xta_wdxt150)
+                        with 8088/NEC-V30-safe CONFIG.SYS boot menu & C:\\DOS\\ utilities
+  - dos622_server.vhd - 10 MB Fixed-Size FAT16 VHD (CHS 306/4/17) with C:\\DOS\\ utilities,
+                        AUTOEXEC.BAT, and deterministic 16 KiB C:\\TEST.DAT
 
-Optional --extras-dir (e.g. analysis/binaries) injects INTERLNK.EXE, INTERSVR.EXE,
-and FC.EXE into C:\\DOS\\ of both VHDs when present.
+Supports combining:
+  --iso "MS-DOS 6.22.iso"                  (uncompressed DOS utilities + El Torito boot floppy)
+  --disks disk1.img disk2.img disk3.img    (extracts uncompressed tools like EXPAND.EXE and
+                                            stages KWAJ-compressed FC.EX_/MODE.CO_ into C:\\SETUP\\
+                                            with C:\\FINSETUP.BAT for native DOS EXPAND.EXE)
+  --extras-dir analysis/binaries           (injects unpacked INTERLNK.EXE, INTERSVR.EXE, etc.)
 
-Requires macOS native tools (bsdtar, hdiutil, newfs_msdos, fsck_msdos, mount).
+Requires macOS native tools (hdiutil, newfs_msdos, fsck_msdos, mount, bsdtar).
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
-import os
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -39,6 +43,8 @@ PART_SECTORS = TOTAL_SECTORS - PART_START_LBA  # 20,791 sectors
 DISK_BYTES = TOTAL_SECTORS * SECTOR_SIZE  # 10,653,696 bytes
 
 VHD_EPOCH = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+SZDD_MAGIC = b"SZDD\x88\xf0\x27\x33"
+KWAJ_MAGIC = b"KWAJ\x88\xf0\x27\xd1"
 
 CLIENT_CONFIG_SYS = (
     "[menu]\r\n"
@@ -86,13 +92,144 @@ SERVER_AUTOEXEC_BAT = (
     "ECHO Run: INTERSVR C: /COM1 /B:115200  (or INTERSVR /RCOPY)\r\n"
 )
 
-# Files to skip from a generic CD boot image that are incompatible with 8088/NEC V30 or unnecessary
-SKIP_ROOT_FILES = {"CONFIG.SYS", "AUTOEXEC.BAT", "C.BAT"}
+SKIP_FILES = {
+    "CONFIG.SYS",
+    "AUTOEXEC.BAT",
+    "C.BAT",
+    "SETUP.EXE",
+    "SETUP.MSG",
+    "DOSSETUP.INI",
+    "PACKING.LST",
+    "BUSETUP.EXE",
+    "AUTOEXEC.UMB",
+}
 ROOT_SYSTEM_FILES = {"IO.SYS", "MSDOS.SYS", "COMMAND.COM"}
+KWAJ_STAGE_TARGETS = {
+    "FC.EX_": "FC.EXE",
+    "MODE.CO_": "MODE.COM",
+    "INTERLNK.EX_": "INTERLNK.EXE",
+    "INTERSVR.EX_": "INTERSVR.EXE",
+}
+
+
+def decompress_szdd(data: bytes, orig_name: str) -> tuple[str, bytes]:
+    """Decompress Microsoft SZDD files; return unchanged if not SZDD."""
+    if len(data) < 14 or data[:8] != SZDD_MAGIC or data[8] != 0x41:
+        return orig_name, data
+
+    missing_char = data[9]
+    expected_size = struct.unpack("<I", data[10:14])[0]
+
+    out_name = orig_name
+    if orig_name.endswith("_") and 32 <= missing_char <= 126:
+        out_name = orig_name[:-1] + chr(missing_char).upper()
+
+    window = bytearray(b" " * 4096)
+    pos = 4096 - 16
+    out = bytearray()
+    idx = 14
+    n = len(data)
+
+    while idx < n and len(out) < expected_size:
+        flags = data[idx]
+        idx += 1
+        for bit in range(8):
+            if idx >= n or len(out) >= expected_size:
+                break
+            if (flags >> bit) & 1:
+                b = data[idx]
+                idx += 1
+                out.append(b)
+                window[pos] = b
+                pos = (pos + 1) & 0xFFF
+            else:
+                if idx + 1 >= n:
+                    break
+                b0 = data[idx]
+                b1 = data[idx + 1]
+                idx += 2
+                offset = b0 | ((b1 & 0xF0) << 4)
+                length = (b1 & 0x0F) + 3
+                for k in range(length):
+                    if len(out) >= expected_size:
+                        break
+                    c = window[(offset + k) & 0xFFF]
+                    out.append(c)
+                    window[pos] = c
+                    pos = (pos + 1) & 0xFFF
+
+    if len(out) != expected_size:
+        raise ValueError(
+            f"SZDD decompression size mismatch for {orig_name}: got {len(out)}, expected {expected_size}"
+        )
+    return out_name, bytes(out)
+
+
+def extract_fat12_floppy(
+    floppy_path: Path,
+    dos_stage_dir: Path,
+    kwaj_stage_dir: Path,
+) -> tuple[list[str], list[str]]:
+    """Extract uncompressed/SZDD files to dos_stage_dir and KWAJ targets to kwaj_stage_dir."""
+    raw = floppy_path.read_bytes()
+    bps, spc, res, fats, root_cnt, _tot16, _media, spf = struct.unpack("<HBHBHHBH", raw[11:24])
+    fat_off = res * bps
+    root_off = (res + fats * spf) * bps
+    root_sectors = ((root_cnt * 32) + (bps - 1)) // bps
+    data_off = root_off + root_sectors * bps
+    cluster_size = spc * bps
+
+    def next_cluster(c: int) -> int:
+        byte_off = fat_off + (c * 3) // 2
+        val = struct.unpack("<H", raw[byte_off : byte_off + 2])[0]
+        return (val >> 4) if (c & 1) else (val & 0x0FFF)
+
+    unpacked: list[str] = []
+    kwaj_staged: list[str] = []
+
+    for i in range(root_cnt):
+        ent = raw[root_off + i * 32 : root_off + (i + 1) * 32]
+        if ent[0] == 0x00:
+            break
+        if ent[0] == 0xE5:
+            continue
+        attr = ent[11]
+        if attr & 0x08 or attr & 0x10 or attr == 0x0F:
+            continue
+        name = ent[0:8].decode("ascii", errors="replace").strip().upper()
+        ext = ent[8:11].decode("ascii", errors="replace").strip().upper()
+        full_name = f"{name}.{ext}" if ext else name
+        cluster = struct.unpack("<H", ent[26:28])[0]
+        size = struct.unpack("<I", ent[28:32])[0]
+
+        buf = bytearray()
+        cur = cluster
+        while 2 <= cur < 0xFF8 and len(buf) < size:
+            c_off = data_off + (cur - 2) * cluster_size
+            buf.extend(raw[c_off : c_off + cluster_size])
+            cur = next_cluster(cur)
+        file_bytes = bytes(buf[:size])
+
+        if file_bytes.startswith(KWAJ_MAGIC):
+            if full_name in KWAJ_STAGE_TARGETS:
+                target = kwaj_stage_dir / full_name
+                if target.exists():
+                    target.chmod(0o644)
+                target.write_bytes(file_bytes)
+                kwaj_staged.append(full_name)
+            continue
+
+        out_name, expanded = decompress_szdd(file_bytes, full_name)
+        target = dos_stage_dir / out_name
+        if target.exists():
+            target.chmod(0o644)
+        target.write_bytes(expanded)
+        unpacked.append(out_name)
+
+    return unpacked, kwaj_staged
 
 
 def extract_eltorito_floppy(iso_path: Path, out_floppy: Path) -> Optional[Path]:
-    """Extract embedded El Torito 1.44 MB / 2.88 MB boot floppy image if present."""
     data = iso_path.read_bytes()
     for sec in range(16, 32):
         off = sec * 2048
@@ -118,26 +255,24 @@ def extract_eltorito_floppy(iso_path: Path, out_floppy: Path) -> Optional[Path]:
 
 
 def build_mbr_sector() -> bytes:
-    """Build a 512-byte MBR sector with 1 active FAT16 (<32MB, type 0x04) partition."""
     mbr = bytearray(512)
-    # Partition 1 entry at offset 0x1BE (16 bytes)
     start_head = 1
     start_sec = 1
     start_cyl = 0
-    end_head = HEADS - 1  # 3
-    end_cyl = CYLINDERS - 1  # 305
-    end_sec = SECTORS_PER_TRACK  # 17
+    end_head = HEADS - 1
+    end_cyl = CYLINDERS - 1
+    end_sec = SECTORS_PER_TRACK
 
     start_cyl_sec = ((start_cyl >> 8) & 0x03) << 6 | (start_sec & 0x3F)
     end_cyl_sec = ((end_cyl >> 8) & 0x03) << 6 | (end_sec & 0x3F)
 
     entry = struct.pack(
         "<BBBBBBBBII",
-        0x80,  # Bootable / active
+        0x80,
         start_head,
         start_cyl_sec,
         start_cyl & 0xFF,
-        0x04,  # FAT16 < 32 MB
+        0x04,
         end_head,
         end_cyl_sec,
         end_cyl & 0xFF,
@@ -150,7 +285,6 @@ def build_mbr_sector() -> bytes:
 
 
 def build_vhd_fixed_footer(disk_bytes: int, cyl: int, heads: int, spt: int) -> bytes:
-    """Build a 512-byte Microsoft Fixed-Size VHD footer with valid checksum."""
     now = datetime.datetime.now(datetime.timezone.utc)
     ts = int((now - VHD_EPOCH).total_seconds())
     geometry = ((cyl & 0xFFFF) << 16) | ((heads & 0xFF) << 8) | (spt & 0xFF)
@@ -161,49 +295,58 @@ def build_vhd_fixed_footer(disk_bytes: int, cyl: int, heads: int, spt: int) -> b
         ">8sIIQI4sI4sQQII",
         footer,
         0,
-        b"conectix",          # Cookie
-        0x00000002,           # Features (Reserved)
-        0x00010000,           # File Format Version 1.0
-        0xFFFFFFFFFFFFFFFF,   # Data Offset (Fixed VHD)
-        ts,                   # Timestamp
-        b"olnk",              # Creator Application
-        0x00010000,           # Creator Version
-        b"Wi2k",              # Creator Host OS
-        disk_bytes,           # Original Size
-        disk_bytes,           # Current Size
-        geometry,             # CHS Disk Geometry
-        2,                    # Disk Type: Fixed hard disk
+        b"conectix",
+        0x00000002,
+        0x00010000,
+        0xFFFFFFFFFFFFFFFF,
+        ts,
+        b"olnk",
+        0x00010000,
+        b"Wi2k",
+        disk_bytes,
+        disk_bytes,
+        geometry,
+        2,
     )
     footer[0x44:0x54] = disk_uuid
-    footer[0x54] = 0  # Saved state
-
-    # VHD footer checksum: one's complement of sum of all bytes (checksum field = 0)
+    footer[0x54] = 0
     checksum = (~sum(footer)) & 0xFFFFFFFF
     struct.pack_into(">I", footer, 0x40, checksum)
     return bytes(footer)
 
 
-def _run(cmd: list[str], env: Optional[dict[str, str]] = None) -> str:
-    res = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
+def _run(cmd: list[str]) -> str:
+    res = subprocess.run(cmd, check=True, capture_output=True, text=True)
     return res.stdout
+
+
+def _unmount_with_retry(mnt_dir: Path, retries: int = 5) -> None:
+    subprocess.run(["sync"], check=False)
+    for attempt in range(retries):
+        res = subprocess.run(["/usr/sbin/diskutil", "unmount", str(mnt_dir)], capture_output=True, text=True)
+        if res.returncode == 0:
+            return
+        time.sleep(0.4 * (attempt + 1))
+    _run(["/usr/sbin/diskutil", "unmount", "force", str(mnt_dir)])
 
 
 def create_single_vhd(
     out_vhd: Path,
     volume_label: str,
-    extracted_iso_dir: Path,
+    staged_dos_dir: Path,
+    kwaj_stage_dir: Path,
     extras_dir: Optional[Path],
     config_sys: str,
     autoexec_bat: str,
     include_test_dat: bool,
 ) -> dict[str, list[str]]:
-    """Create a raw MBR+FAT16 image via macOS hdiutil/newfs_msdos and append VHD footer."""
     if sys.platform != "darwin":
         raise RuntimeError("This helper uses macOS hdiutil/newfs_msdos.")
 
     out_vhd.parent.mkdir(parents=True, exist_ok=True)
     copied_dos: list[str] = []
     injected_extras: list[str] = []
+    kwaj_pending: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="openlnk_vhd_") as tmp_str:
         tmp = Path(tmp_str)
@@ -211,12 +354,10 @@ def create_single_vhd(
         mnt_dir = tmp / "mnt"
         mnt_dir.mkdir()
 
-        # 1. Create zeroed raw disk + write MBR partition table
         with raw_img.open("wb") as fp:
             fp.write(build_mbr_sector())
             fp.truncate(DISK_BYTES)
 
-        # 2. Attach raw image without mounting
         attach_out = _run(
             [
                 "hdiutil",
@@ -244,7 +385,6 @@ def create_single_vhd(
 
         mounted = False
         try:
-            # 3. Format partition 1 as FAT16 matching CHS 306/4/17 and HiddenSectors=17
             _run(
                 [
                     "/sbin/newfs_msdos",
@@ -264,44 +404,58 @@ def create_single_vhd(
                 ]
             )
 
-            # 4. Mount with nobrowse to avoid Spotlight metadata clutter
             _run(["mount", "-t", "msdos", "-o", "nobrowse", part_dev, str(mnt_dir)])
             mounted = True
 
             dos_dir = mnt_dir / "DOS"
             dos_dir.mkdir(exist_ok=True)
 
-            # Copy IO.SYS, MSDOS.SYS, COMMAND.COM first to root, everything else to C:\DOS
-            iso_files = {p.name.upper(): p for p in extracted_iso_dir.iterdir() if p.is_file()}
+            staged_files = {p.name.upper(): p for p in staged_dos_dir.iterdir() if p.is_file()}
             for sys_name in ("IO.SYS", "MSDOS.SYS", "COMMAND.COM"):
-                if sys_name in iso_files:
-                    shutil.copyfile(iso_files[sys_name], mnt_dir / sys_name)
+                if sys_name in staged_files:
+                    shutil.copyfile(staged_files[sys_name], mnt_dir / sys_name)
 
-            for upper_name, src_path in sorted(iso_files.items()):
-                if upper_name in SKIP_ROOT_FILES or upper_name in ROOT_SYSTEM_FILES:
+            for upper_name, src_path in sorted(staged_files.items()):
+                if upper_name in SKIP_FILES or upper_name in ROOT_SYSTEM_FILES:
                     continue
                 shutil.copyfile(src_path, dos_dir / upper_name)
                 copied_dos.append(upper_name)
 
-            # Inject optional extra MS-DOS binaries (INTERLNK.EXE, INTERSVR.EXE, FC.EXE)
             if extras_dir and extras_dir.is_dir():
-                for candidate in ("INTERLNK.EXE", "INTERSVR.EXE", "FC.EXE"):
+                for candidate in ("INTERLNK.EXE", "INTERSVR.EXE", "FC.EXE", "MODE.COM"):
+                    if candidate in copied_dos:
+                        continue
                     for p in extras_dir.iterdir():
                         if p.is_file() and p.name.upper() == candidate:
                             shutil.copyfile(p, dos_dir / candidate)
                             injected_extras.append(candidate)
+                            copied_dos.append(candidate)
                             break
 
-            # Write DOS CRLF CONFIG.SYS and AUTOEXEC.BAT
+            # Stage any remaining needed KWAJ archives (e.g. FC.EX_, MODE.CO_) into C:\SETUP\
+            kwaj_files = {p.name.upper(): p for p in kwaj_stage_dir.iterdir() if p.is_file()}
+            fin_lines = ["@ECHO OFF\r\n"]
+            setup_dir = mnt_dir / "SETUP"
+            for src_name, dst_name in sorted(KWAJ_STAGE_TARGETS.items()):
+                if dst_name in copied_dos:
+                    continue
+                if src_name in kwaj_files:
+                    setup_dir.mkdir(exist_ok=True)
+                    shutil.copyfile(kwaj_files[src_name], setup_dir / src_name)
+                    fin_lines.append(f"C:\\DOS\\EXPAND.EXE C:\\SETUP\\{src_name} C:\\DOS\\{dst_name}\r\n")
+                    kwaj_pending.append(f"{src_name}->{dst_name}")
+
+            if kwaj_pending:
+                fin_lines.append("ECHO Expanded optional MS-DOS 6.22 utilities into C:\\DOS\\\r\n")
+                (mnt_dir / "FINSETUP.BAT").write_bytes("".join(fin_lines).encode("ascii"))
+
             (mnt_dir / "CONFIG.SYS").write_bytes(config_sys.encode("ascii"))
             (mnt_dir / "AUTOEXEC.BAT").write_bytes(autoexec_bat.encode("ascii"))
 
             if include_test_dat:
-                # 16 KiB deterministic test file for COPY / FC /B Oracle verification
                 pattern = bytes(((i * 37 + 11) & 0xFF) for i in range(16384))
                 (mnt_dir / "TEST.DAT").write_bytes(pattern)
 
-            # Remove any macOS dotfiles if created
             for junk in (".fseventsd", ".Spotlight-V100", ".Trashes"):
                 jp = mnt_dir / junk
                 if jp.is_dir():
@@ -309,61 +463,80 @@ def create_single_vhd(
                 elif jp.is_file():
                     jp.unlink(missing_ok=True)
 
-            _run(["umount", str(mnt_dir)])
+            _unmount_with_retry(mnt_dir)
             mounted = False
 
-            # 5. Verify FAT16 filesystem integrity with fsck_msdos
             _run(["/sbin/fsck_msdos", "-n", part_dev])
         finally:
             if mounted:
-                subprocess.run(["umount", str(mnt_dir)], check=False)
-            subprocess.run(["hdiutil", "detach", whole_dev], check=False, capture_output=True)
+                subprocess.run(["/usr/sbin/diskutil", "unmount", "force", str(mnt_dir)], check=False, capture_output=True)
+            subprocess.run(["hdiutil", "detach", "-force", whole_dev], check=False, capture_output=True)
 
-        # 6. Write Fixed-Size VHD = raw disk + 512-byte Microsoft VHD footer
         footer = build_vhd_fixed_footer(DISK_BYTES, CYLINDERS, HEADS, SECTORS_PER_TRACK)
         with raw_img.open("rb") as src, out_vhd.open("wb") as dst:
             shutil.copyfileobj(src, dst)
             dst.write(footer)
 
-    return {"dos_files": copied_dos, "extras": injected_extras}
+    return {"dos_files": copied_dos, "extras": injected_extras, "kwaj_pending": kwaj_pending}
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build 86Box MS-DOS 6.22 Client & Server Fixed-Size VHDs from ISO."
+        description="Build 86Box MS-DOS 6.22 Client & Server Fixed-Size VHDs from floppy disks and/or ISO."
     )
-    parser.add_argument("--iso", type=Path, required=True, help="Path to MS-DOS 6.22 ISO")
+    parser.add_argument("--iso", type=Path, help="Optional MS-DOS 6.22 ISO (boot floppy + uncompressed tools)")
+    parser.add_argument(
+        "--disks",
+        type=Path,
+        nargs="+",
+        help="MS-DOS 6.22 1.44 MB setup floppy images (e.g. dos-622-disk1.img disk2.img disk3.img)",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
         default=Path("analysis/binaries/vhds"),
-        help="Output directory for VHDs and extracted boot floppy",
+        help="Output directory for VHDs and boot floppy",
     )
     parser.add_argument(
         "--extras-dir",
         type=Path,
         default=Path("analysis/binaries"),
-        help="Optional directory containing INTERLNK.EXE / INTERSVR.EXE / FC.EXE to inject into C:\\DOS",
+        help="Directory with unpacked INTERLNK.EXE / INTERSVR.EXE / FC.EXE / MODE.COM",
     )
     args = parser.parse_args(argv)
 
-    if not args.iso.is_file():
-        print(f"[create_dos_vhds] ERROR: ISO not found: {args.iso}", file=sys.stderr)
-        return 1
+    if not args.iso and not args.disks:
+        parser.error("Provide --disks and/or --iso.")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Extract El Torito boot floppy if present
-    boot_floppy = extract_eltorito_floppy(args.iso, args.out_dir / "dos622_boot.img")
-    if boot_floppy:
-        print(f"[create_dos_vhds] Extracted El Torito boot floppy: {boot_floppy} ({boot_floppy.stat().st_size} bytes)")
-    else:
-        print("[create_dos_vhds] Note: No El Torito floppy image found in ISO.")
+    if args.iso:
+        if not args.iso.is_file():
+            print(f"[create_dos_vhds] ERROR: ISO not found: {args.iso}", file=sys.stderr)
+            return 1
+        boot_floppy = extract_eltorito_floppy(args.iso, args.out_dir / "dos622_boot.img")
+        if boot_floppy:
+            print(f"[create_dos_vhds] Extracted El Torito boot floppy: {boot_floppy}")
 
-    # 2. Extract ISO files into temporary staging directory
-    with tempfile.TemporaryDirectory(prefix="openlnk_iso_") as iso_tmp_str:
-        iso_tmp = Path(iso_tmp_str)
-        _run(["bsdtar", "-xf", str(args.iso), "-C", str(iso_tmp)])
+    with tempfile.TemporaryDirectory(prefix="openlnk_stage_") as stage_str:
+        stage_root = Path(stage_str)
+        dos_stage = stage_root / "dos"
+        kwaj_stage = stage_root / "kwaj"
+        dos_stage.mkdir()
+        kwaj_stage.mkdir()
+
+        if args.iso:
+            _run(["bsdtar", "-xf", str(args.iso), "-C", str(dos_stage)])
+        if args.disks:
+            for dpath in args.disks:
+                if not dpath.is_file():
+                    print(f"[create_dos_vhds] ERROR: Disk image not found: {dpath}", file=sys.stderr)
+                    return 1
+                unpacked, kwaj = extract_fat12_floppy(dpath, dos_stage, kwaj_stage)
+                print(
+                    f"[create_dos_vhds] {dpath.name}: unpacked={len(unpacked)}, "
+                    f"kwaj_staged={kwaj}"
+                )
 
         client_vhd = args.out_dir / "dos622_client.vhd"
         server_vhd = args.out_dir / "dos622_server.vhd"
@@ -371,7 +544,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         c_info = create_single_vhd(
             out_vhd=client_vhd,
             volume_label="DOS622_CLI",
-            extracted_iso_dir=iso_tmp,
+            staged_dos_dir=dos_stage,
+            kwaj_stage_dir=kwaj_stage,
             extras_dir=args.extras_dir,
             config_sys=CLIENT_CONFIG_SYS,
             autoexec_bat=CLIENT_AUTOEXEC_BAT,
@@ -379,13 +553,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         print(
             f"[create_dos_vhds] Created {client_vhd} ({client_vhd.stat().st_size} bytes, "
-            f"DOS utils={len(c_info['dos_files'])}, extras={c_info['extras']})"
+            f"C:\\DOS={len(c_info['dos_files'])}, extras={c_info['extras']}, "
+            f"C:\\FINSETUP.BAT={c_info['kwaj_pending']})"
         )
 
         s_info = create_single_vhd(
             out_vhd=server_vhd,
             volume_label="DOS622_SRV",
-            extracted_iso_dir=iso_tmp,
+            staged_dos_dir=dos_stage,
+            kwaj_stage_dir=kwaj_stage,
             extras_dir=args.extras_dir,
             config_sys=SERVER_CONFIG_SYS,
             autoexec_bat=SERVER_AUTOEXEC_BAT,
@@ -393,14 +569,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         print(
             f"[create_dos_vhds] Created {server_vhd} ({server_vhd.stat().st_size} bytes, "
-            f"DOS utils={len(s_info['dos_files'])}, extras={s_info['extras']})"
-        )
-
-    missing_inter = [x for x in ("INTERLNK.EXE", "INTERSVR.EXE") if x not in c_info["extras"]]
-    if missing_inter:
-        print(
-            f"[create_dos_vhds] NOTICE: {', '.join(missing_inter)} were not in ISO or {args.extras_dir}. "
-            "Place them in analysis/binaries/ and re-run this script to inject them into C:\\DOS\\."
+            f"C:\\DOS={len(s_info['dos_files'])}, extras={s_info['extras']}, "
+            f"C:\\FINSETUP.BAT={s_info['kwaj_pending']})"
         )
 
     return 0
