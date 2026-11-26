@@ -17,6 +17,7 @@ import argparse
 import os
 import select
 import signal
+import stat
 import struct
 import sys
 import threading
@@ -240,10 +241,20 @@ def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
     out_path = Path(f"{prefix}.out")
     for p in (in_path, out_path):
         if p.exists():
-            p.unlink()
-        os.mkfifo(p, 0o600)
+            if not stat.S_ISFIFO(p.stat().st_mode):
+                p.unlink()
+                os.mkfifo(p, 0o600)
+        else:
+            os.mkfifo(p, 0o600)
     read_fd = os.open(str(out_path), os.O_RDWR | os.O_NONBLOCK)
     write_fd = os.open(str(in_path), os.O_RDWR | os.O_NONBLOCK)
+    # Drain any stale buffered bytes from a prior session on reused FIFOs
+    while True:
+        try:
+            if not os.read(read_fd, 4096):
+                break
+        except BlockingIOError:
+            break
     return in_path, out_path, read_fd, write_fd
 
 
@@ -378,8 +389,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                         os.close(fd)
                     except OSError:
                         pass
-                for p in (c_in, c_out, s_in, s_out):
-                    p.unlink(missing_ok=True)
         elif args.create_ptys:
             c_master, c_slave, c_path = create_pty_pair()
             s_master, s_slave, s_path = create_pty_pair()
