@@ -164,6 +164,21 @@ class TestSerialMitm(unittest.TestCase):
             self.assertEqual(sink.bytes_c2s, len(b"\x03RCOPY"))
             self.assertEqual(sink.bytes_s2c, len(b"C:\\>"))
 
+    @unittest.skipIf(os.name != "posix", "POSIX pacing test")
+    def test_paced_write_persists_across_single_byte_calls(self) -> None:
+        rfd, wfd = os.pipe()
+        try:
+            t0 = time.perf_counter_ns()
+            nxt = 0
+            for _ in range(8):
+                nxt = serial_mitm._write_paced(wfd, b"X", 1000, nxt)
+            elapsed_ms = (time.perf_counter_ns() - t0) / 1_000_000.0
+            self.assertGreaterEqual(elapsed_ms, 6.5)
+            self.assertEqual(os.read(rfd, 16), b"XXXXXXXX")
+        finally:
+            os.close(rfd)
+            os.close(wfd)
+
 
 class TestCleanroomIsolation(unittest.TestCase):
     def test_repo_passes_cleanroom_isolation(self) -> None:

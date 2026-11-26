@@ -247,24 +247,24 @@ def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
     return in_path, out_path, read_fd, write_fd
 
 
-def _write_paced(fd: int, data: bytes, pace_us: int) -> None:
+def _write_paced(fd: int, data: bytes, pace_us: int, next_ts_ns: int) -> int:
     if pace_us <= 0 or len(data) == 0:
         os.write(fd, data)
-        return
-    # Use monotonic nanosecond pacing instead of time.sleep(<1ms), which
-    # suffers from OS timer coalescing on macOS (often overshooting 2-3x).
+        return next_ts_ns
+    # Monotonic nanosecond pacing persisted across calls (handles 1-byte reads).
     interval_ns = pace_us * 1000
-    next_ts = time.perf_counter_ns()
     for idx in range(len(data)):
         now = time.perf_counter_ns()
-        if now < next_ts:
-            rem = next_ts - now
+        if now < next_ts_ns:
+            rem = next_ts_ns - now
             if rem > 2_000_000:
                 time.sleep((rem - 1_000_000) / 1_000_000_000.0)
-            while time.perf_counter_ns() < next_ts:
+            while time.perf_counter_ns() < next_ts_ns:
                 pass
+            now = time.perf_counter_ns()
         os.write(fd, data[idx : idx + 1])
-        next_ts = time.perf_counter_ns() + interval_ns
+        next_ts_ns = now + interval_ns
+    return next_ts_ns
 
 
 def relay_pipe_quad(
@@ -279,6 +279,8 @@ def relay_pipe_quad(
 ) -> None:
     """Bidirectional non-blocking select() relay over two separate in/out FIFO pairs."""
     read_fds = [client_read_fd, server_read_fd]
+    next_c2s_ns = 0
+    next_s2c_ns = 0
     while not stop_event.is_set():
         readable, _, _ = select.select(read_fds, [], [], poll_timeout)
         for fd in readable:
@@ -290,10 +292,10 @@ def relay_pipe_quad(
                 continue
             ts_ns = time.time_ns()
             if fd == client_read_fd:
-                _write_paced(server_write_fd, data, pace_us)
+                next_c2s_ns = _write_paced(server_write_fd, data, pace_us, next_c2s_ns)
                 sink.record(ts_ns, "CLIENT", "SERVER", data)
             else:
-                _write_paced(client_write_fd, data, pace_us)
+                next_s2c_ns = _write_paced(client_write_fd, data, pace_us, next_s2c_ns)
                 sink.record(ts_ns, "SERVER", "CLIENT", data)
 
 
