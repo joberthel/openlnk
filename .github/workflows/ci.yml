@@ -1,0 +1,184 @@
+name: OpenLNK Clean-Room CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanroom-isolation:
+    name: Clean-Room Isolation & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify clean-room boundaries & zero-alloc/zero-float invariants
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 tools/ci/check_cleanroom_isolation.py \
+              --diff-range "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
+          else
+            python3 tools/ci/check_cleanroom_isolation.py
+          fi
+
+      - name: Validate shell scripts and JSON manifests
+        run: |
+          bash -n tools/runner/run_86box.sh
+          bash -n tools/runner/capture_golden_traces.sh
+          bash -n tools/ci/install_hooks.sh
+          bash -n analysis/start_ghidra_mcp.sh
+          bash -n .githooks/pre-commit
+          python3 -m json.tool .vscode/mcp.json > /dev/null
+          python3 -m json.tool esp32/library.json > /dev/null
+
+  c99-native-build:
+    name: C99 Native (${{ matrix.os }} / ${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+          - os: ubuntu-latest
+            compiler: clang
+            cc: clang
+          - os: macos-latest
+            compiler: clang
+            cc: clang
+          - os: windows-latest
+            compiler: msvc
+            cc: cl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        env:
+          CC: ${{ matrix.cc }}
+        run: cmake -S cleanroom -B cleanroom/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure CMake (Windows MSVC)
+        if: runner.os == 'Windows'
+        run: cmake -S cleanroom -B cleanroom/build
+
+      - name: Build libinterlnk & desktop tools
+        run: cmake --build cleanroom/build --config Release
+
+      - name: Run C99 unit, loopback & fault-injection tests
+        run: ctest --test-dir cleanroom/build -C Release --output-on-failure
+
+      - name: Run ilnk-server self-test
+        shell: bash
+        run: |
+          if [ -x cleanroom/build/ilnk-server ]; then
+            ./cleanroom/build/ilnk-server --self-test
+          else
+            ./cleanroom/build/Release/ilnk-server.exe --self-test
+          fi
+
+  dos-16bit-watcom:
+    name: MS-DOS 16-Bit Real-Mode (Open Watcom v2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Open Watcom v2 snapshot
+        id: cache-watcom
+        uses: actions/cache@v4
+        with:
+          path: /opt/watcom
+          key: open-watcom-v2-linux-x64-v1
+
+      - name: Install Open Watcom v2
+        if: steps.cache-watcom.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/watcom
+          curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/owsnapshot.tar.xz" \
+            | sudo tar -xJf - -C /opt/watcom
+
+      - name: Cross-compile 16-bit DOS INTERSVR.EXE & driver object
+        env:
+          WATCOM: /opt/watcom
+          INCLUDE: /opt/watcom/h
+        run: |
+          export PATH="$WATCOM/binl64:$PATH"
+          make -C cleanroom/dos -f Makefile.watcom
+          test -f cleanroom/dos/build/INTERSVR.EXE
+          test -f cleanroom/dos/build/interlnk_sys_stub.obj
+          python3 -c "data=open('cleanroom/dos/build/INTERSVR.EXE','rb').read(2); assert data==b'MZ', f'Expected DOS MZ header, got {data!r}'; print('Verified DOS MZ executable header')"
+
+      - name: Upload 16-bit DOS build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dos-16bit-binaries
+          path: |
+            cleanroom/dos/build/INTERSVR.EXE
+            cleanroom/dos/build/interlnk_sys_stub.obj
+
+  kaitai-and-vectors:
+    name: Kaitai Struct & Differential Test Vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Kaitai Struct Compiler & runtime
+        run: |
+          KSC_VERSION="0.11"
+          curl -fsSLO "https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/${KSC_VERSION}/kaitai-struct-compiler_${KSC_VERSION}_all.deb"
+          sudo apt-get update
+          sudo apt-get install -y "./kaitai-struct-compiler_${KSC_VERSION}_all.deb"
+          python3 -m pip install --upgrade kaitaistruct
+
+      - name: Compile specs/interlnk_wire.ksy (Python & C++11)
+        run: |
+          kaitai-struct-compiler --target python --outdir tests/harness/parsers/ specs/interlnk_wire.ksy
+          kaitai-struct-compiler --target cpp_stl --outdir tests/harness/parsers/ specs/interlnk_wire.ksy
+          test -f tests/harness/parsers/interlnk_wire.py
+          test -f tests/harness/parsers/interlnk_wire.cpp
+          test -f tests/harness/parsers/interlnk_wire.h
+
+      - name: Build C99 vector validator
+        run: |
+          cmake -S cleanroom -B cleanroom/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build cleanroom/build --target ilnk-vector-check
+
+      - name: Validate JSON test vectors (Kaitai + C99 parity)
+        run: |
+          python3 tests/harness/test_runner.py \
+            --require-kaitai \
+            --c-binary cleanroom/build/ilnk-vector-check
+
+  python-tooling-tests:
+    name: Python Harness, Sniffer & Verifier Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Python tooling unit test suite
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v

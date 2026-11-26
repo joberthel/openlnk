@@ -1,0 +1,64 @@
+# Proprietary MS-DOS binaries & disk images (NEVER commit to repository)
+analysis/binaries/*
+!analysis/binaries/.gitkeep
+*.EXE
+*.exe
+*.SYS
+*.sys
+*.COM
+*.com
+*.VHD
+*.vhd
+*.IMG
+*.img
+*.IMA
+*.ima
+*.ISO
+*.iso
+
+# Ghidra project binaries & locks (keep folder structure only)
+analysis/ghidra_project/*.gpr
+analysis/ghidra_project/*.rep/
+analysis/ghidra_project/*.lock
+analysis/ghidra_project/*.lock~
+
+# Raw capture streams (commit only sanitized fixtures/traces explicitly)
+analysis/traces/*.bin
+analysis/traces/*.pcap
+analysis/traces/*.hexlog
+!analysis/traces/.gitkeep
+
+# Generated Kaitai Struct parsers (rebuilt automatically in CI/harness)
+tests/harness/parsers/*.py
+tests/harness/parsers/*.cpp
+tests/harness/parsers/*.h
+!tests/harness/parsers/.gitkeep
+
+# Build outputs
+build/
+cleanroom/build/
+cleanroom/dos/build/
+*.o
+*.obj
+*.a
+*.lib
+*.err
+*.map
+*.out
+cleanroom/ilnk-server
+cleanroom/ilnk-client
+cleanroom/ilnk-vector-check
+cleanroom/test_libinterlnk
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment & IDE clutter
+.env
+.env.local
+.DS_Store
+Thumbs.db

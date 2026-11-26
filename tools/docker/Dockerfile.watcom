@@ -1,0 +1,21 @@
+# tools/docker/Dockerfile.watcom
+# Reproducible Open Watcom v2 16-bit Real-Mode DOS cross-compilation container.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    make \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV WATCOM=/opt/watcom
+ENV PATH="${WATCOM}/binl64:${PATH}"
+ENV INCLUDE="${WATCOM}/h"
+
+RUN mkdir -p "${WATCOM}" \
+    && curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/owsnapshot.tar.xz" \
+    | tar -xJf - -C "${WATCOM}"
+
+WORKDIR /workspace
+CMD ["make", "-C", "cleanroom/dos", "-f", "Makefile.watcom"]

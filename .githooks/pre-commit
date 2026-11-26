@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit
+# Enforces Agent A / Agent B Clean-Room Isolation before every local commit.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec python3 "${REPO_ROOT}/tools/ci/check_cleanroom_isolation.py" --root "${REPO_ROOT}" --staged

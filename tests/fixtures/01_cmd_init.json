@@ -1,0 +1,18 @@
+{
+  "test_case": "CMD_INIT_DOS622_4DRIVES",
+  "raw_hex": "55aa0101030022060459e0",
+  "parsed_expected": {
+    "sync_bytes": [
+      85,
+      170
+    ],
+    "frame_type": 1,
+    "sequence_number": 1,
+    "payload_length": 3,
+    "payload": {
+      "client_version": 1570,
+      "drive_count": 4
+    },
+    "checksum": 57433
+  }
+}
