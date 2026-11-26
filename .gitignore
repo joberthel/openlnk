@@ -22,11 +22,14 @@ analysis/ghidra_project/*.rep/
 analysis/ghidra_project/*.lock
 analysis/ghidra_project/*.lock~
 
-# Raw capture streams (commit only sanitized fixtures/traces explicitly)
+# Raw capture streams (commit only compressed Golden Trace .hexlog.gz)
 analysis/traces/*.bin
 analysis/traces/*.pcap
 analysis/traces/*.hexlog
 !analysis/traces/.gitkeep
+tests/traces/*.bin
+tests/traces/*.pcap
+tests/traces/*.hexlog
 
 # Generated Kaitai Struct parsers (rebuilt automatically in CI/harness)
 tests/harness/parsers/*.py
