@@ -138,11 +138,11 @@ class TestSerialMitm(unittest.TestCase):
             )
             t.start()
             try:
-                # 86Box Client mode writes to .in and reads from .out
-                cli_tx = os.open(str(c_in), os.O_WRONLY | os.O_NONBLOCK)
-                srv_rx = os.open(str(s_out), os.O_RDONLY | os.O_NONBLOCK)
-                srv_tx = os.open(str(s_in), os.O_WRONLY | os.O_NONBLOCK)
-                cli_rx = os.open(str(c_out), os.O_RDONLY | os.O_NONBLOCK)
+                # 86Box writes to .out and reads from .in
+                cli_tx = os.open(str(c_out), os.O_WRONLY | os.O_NONBLOCK)
+                srv_rx = os.open(str(s_in), os.O_RDONLY | os.O_NONBLOCK)
+                srv_tx = os.open(str(s_out), os.O_WRONLY | os.O_NONBLOCK)
+                cli_rx = os.open(str(c_in), os.O_RDONLY | os.O_NONBLOCK)
                 try:
                     os.write(cli_tx, b"\x03RCOPY")
                     time.sleep(0.05)

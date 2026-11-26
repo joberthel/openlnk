@@ -230,10 +230,10 @@ def run_serial_mode(
 
 
 def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
-    """Create POSIX .in and .out FIFOs for 86Box Named Pipe (COM) Client mode.
+    """Create POSIX .in and .out FIFOs for 86Box Named Pipe (COM) mode.
 
-    In 86Box Client mode (mode=1), 86Box writes to <prefix>.in and reads from <prefix>.out.
-    Therefore the MITM proxy reads from .in and writes to .out, opening both with
+    In 86Box on Linux/macOS, 86Box reads from <prefix>.in and writes to <prefix>.out.
+    Therefore the MITM proxy reads from .out and writes to .in, opening both with
     O_RDWR | O_NONBLOCK so neither end ever deadlocks on open or disconnect.
     """
     in_path = Path(f"{prefix}.in")
@@ -242,8 +242,8 @@ def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
         if p.exists():
             p.unlink()
         os.mkfifo(p, 0o600)
-    read_fd = os.open(str(in_path), os.O_RDWR | os.O_NONBLOCK)
-    write_fd = os.open(str(out_path), os.O_RDWR | os.O_NONBLOCK)
+    read_fd = os.open(str(out_path), os.O_RDWR | os.O_NONBLOCK)
+    write_fd = os.open(str(in_path), os.O_RDWR | os.O_NONBLOCK)
     return in_path, out_path, read_fd, write_fd
 
 
