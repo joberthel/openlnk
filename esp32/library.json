@@ -1,8 +1,9 @@
 {
-  "name": "libinterlnk",
+  "name": "openlnk",
   "version": "0.1.0",
-  "description": "Clean-room allocation-free C99 MS-DOS INTERLNK/INTERSVR serial/SD block server library",
+  "description": "OpenLNK (libopenlnk): clean-room allocation-free C99 MS-DOS INTERLNK/INTERSVR serial/SD block server library",
   "keywords": [
+    "openlnk",
     "msdos",
     "interlnk",
     "intersvr",

@@ -154,12 +154,12 @@ class TestCleanroomIsolation(unittest.TestCase):
 
     def test_catches_dual_agent_commit_boundary(self) -> None:
         violations = isolation.check_dual_agent_boundary(
-            ["analysis/setup_ghidra.py", "cleanroom/src/interlnk.c"]
+            ["analysis/setup_ghidra.py", "cleanroom/src/openlnk.c"]
         )
         self.assertEqual(len(violations), 1)
         self.assertIn("DUAL_AGENT_BOUNDARY", violations[0])
         self.assertEqual(
-            isolation.check_dual_agent_boundary(["specs/interlnk_wire.ksy", "cleanroom/src/interlnk.c"]),
+            isolation.check_dual_agent_boundary(["specs/interlnk_wire.ksy", "cleanroom/src/openlnk.c"]),
             [],
         )
 

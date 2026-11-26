@@ -1,10 +1,10 @@
-/* cleanroom/dos/interlnk_sys_stub.c
+/* cleanroom/dos/openlnk_sys_stub.c
  *
- * Clean-room 16-bit Real-Mode DOS Block Device Driver skeleton.
+ * Clean-room 16-bit Real-Mode DOS Block Device Driver (OPENLNK.SYS) skeleton.
  * Header layout follows the publicly documented MS-DOS Programmer's Reference.
  * Compiled via Open Watcom v2 (-ms small model, zero C runtime overhead).
  */
-#include "interlnk/interlnk.h"
+#include "openlnk/openlnk.h"
 
 #include <stdint.h>
 
@@ -17,22 +17,22 @@ typedef struct {
     uint8_t  reserved[7];
 } dos_block_driver_header_t;
 
-static ilnk_ctx_t g_driver_ctx;
+static olnk_ctx_t g_driver_ctx;
 
-void ilnk_dos_strategy(void) {
+void olnk_dos_strategy(void) {
     /* Placeholder: capture ES:BX Request Header pointer in Phase 2 DOS HAL */
 }
 
-void ilnk_dos_interrupt(void) {
+void olnk_dos_interrupt(void) {
     /* Placeholder: dispatch DOS block device commands via g_driver_ctx */
-    (void)ilnk_poll(&g_driver_ctx);
+    (void)olnk_poll(&g_driver_ctx);
 }
 
-const dos_block_driver_header_t ilnk_dos_header = {
+const dos_block_driver_header_t olnk_dos_header = {
     0xFFFFFFFFUL, /* Last driver in chain */
     0x0802U,      /* Block device, Open/Close/RM + 32-bit sector addressing */
     0x0000U,      /* Strategy offset (linked in assembly stub) */
     0x0000U,      /* Interrupt offset (linked in assembly stub) */
     1U,           /* 1 redirected remote block unit */
-    { 'O', 'P', 'N', 'L', 'N', 'K', ' ' }
+    { 'O', 'P', 'E', 'N', 'L', 'N', 'K' }
 };

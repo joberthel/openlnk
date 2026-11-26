@@ -155,9 +155,9 @@ case "$MODE" in
         launch_vm "CLIENT" "${WORKDIR}/client" "$CLIENT_CFG"
         ;;
     oracle)
-        echo "[run_86box] Differential Oracle mode: MS-DOS Client VM <-> cleanroom ilnk-server"
+        echo "[run_86box] Differential Oracle mode: MS-DOS Client VM <-> cleanroom opensvr"
         launch_vm "CLIENT" "${WORKDIR}/client" "$CLIENT_CFG"
-        echo "[run_86box] Connect ilnk-server to peer PTY of ${SERIAL_CLIENT} at ${BAUD} bps."
+        echo "[run_86box] Connect opensvr to peer PTY of ${SERIAL_CLIENT} at ${BAUD} bps."
         ;;
     *)
         echo "[run_86box] ERROR: Unknown mode '${MODE}'. Expected client|server|dual|oracle." >&2

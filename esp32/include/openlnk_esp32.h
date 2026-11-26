@@ -1,12 +1,12 @@
-/* esp32/include/interlnk_esp32.h */
-#ifndef INTERLNK_ESP32_H
-#define INTERLNK_ESP32_H
+/* esp32/include/openlnk_esp32.h */
+#ifndef OPENLNK_ESP32_H
+#define OPENLNK_ESP32_H
 
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "interlnk/interlnk.h"
-#include "interlnk/storage.h"
+#include "openlnk/openlnk.h"
+#include "openlnk/storage.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,19 +20,19 @@ typedef struct {
     int cts_pin;
     uint32_t baudrate;
     bool use_hw_flow_control;
-} ilnk_esp32_uart_cfg_t;
+} olnk_esp32_uart_cfg_t;
 
 /**
  * Initialize hardware UART (for MAX3232 RS-232 transceiver) with internal
  * ring buffer and optional RTS/CTS flow control at up to 115200 bps.
  */
-ilnk_status_t ilnk_esp32_uart_init(
-    const ilnk_esp32_uart_cfg_t *cfg,
-    ilnk_transport_t *out_transport
+olnk_status_t olnk_esp32_uart_init(
+    const olnk_esp32_uart_cfg_t *cfg,
+    olnk_transport_t *out_transport
 );
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* INTERLNK_ESP32_H */
+#endif /* OPENLNK_ESP32_H */

@@ -38,6 +38,6 @@ This document tracks objective verification evidence against the 5-Stage Definit
 
 - [x] **Gate 1 — Clean-Room Isolation:** Pre-commit hook & CI script enforce Agent A / Agent B separation and zero-alloc / zero-FP invariants.
 - [x] **Gate 2 — Kaitai & JSON Vectors:** Formal `.ksy` spec compiles cleanly and validates JSON test vectors with C99 parity.
-- [x] **Gate 3 — Loopback & Fault-Injection:** In-memory pipe loopback, single-bit flip, frame truncation, and buffer-overflow recovery tests pass in `test_libinterlnk`.
-- [ ] **Gate 4 — Differential Oracle (86Box Headless):** Original MS-DOS 6.22 `INTERLNK.EXE` client verified end-to-end against `ilnk-server`.
+- [x] **Gate 3 — Loopback & Fault-Injection:** In-memory pipe loopback, single-bit flip, frame truncation, and buffer-overflow recovery tests pass in `test_libopenlnk`.
+- [ ] **Gate 4 — Differential Oracle (86Box Headless):** Original MS-DOS 6.22 `INTERLNK.EXE` client verified end-to-end against `opensvr`.
 - [ ] **Gate 5 — Hardware Parity Sign-Off:** Real IBM PC/XT 5160 + ESP32 SD card soak test signed off.

@@ -6,7 +6,7 @@ Validates every JSON test vector in tests/fixtures/*.json against:
      (tests/harness/parsers/interlnk_wire.py), with an optional built-in
      reference decoder fallback when kaitaistruct is not installed locally.
   2. Deterministic CRC-16/CCITT-FALSE checksum validation.
-  3. Optional cross-check against the clean-room C99 binary (ilnk-vector-check)
+  3. Optional cross-check against the clean-room C99 binary (openlnk-vector-check)
      to assert 100% differential equivalence between spec and implementation.
 """
 
@@ -341,7 +341,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--c-binary",
         type=Path,
-        help="Optional path to cleanroom/ilnk-vector-check for C99 differential parity",
+        help="Optional path to cleanroom/openlnk-vector-check for C99 differential parity",
     )
     args = parser.parse_args(argv)
 

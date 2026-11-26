@@ -34,7 +34,7 @@ Clean-room separation is enforced automatically via:
   - Blocks any cross-boundary import, `#include`, path reference, or symbol referencing `analysis/`, Ghidra files, or disassembly artifacts from inside `cleanroom/` or `esp32/`.
   - Scans all tracked files for forbidden leaked-source signatures.
   - Prevents a single commit or pull request from simultaneously modifying `analysis/` and `cleanroom/` (ensuring Agent A and Agent B commits remain strictly separated in git history).
-  - Enforces `libinterlnk` architectural invariants (zero dynamic memory allocation, zero floating-point arithmetic).
+  - Enforces `libopenlnk` architectural invariants (zero dynamic memory allocation, zero floating-point arithmetic).
 
 ## 5. Immutable Audit Logging
 

@@ -1,33 +1,33 @@
-/* cleanroom/src/interlnk.c */
-#include "interlnk/interlnk.h"
+/* cleanroom/src/openlnk.c */
+#include "openlnk/openlnk.h"
 
 #include <string.h>
 
-#define ILNK_POLL_CHUNK_SIZE   64U
-#define ILNK_DEFAULT_POLL_MS   10U
+#define OLNK_POLL_CHUNK_SIZE   64U
+#define OLNK_DEFAULT_POLL_MS   10U
 
-ilnk_status_t ilnk_init(ilnk_ctx_t *ctx, ilnk_transport_t transport) {
+olnk_status_t olnk_init(olnk_ctx_t *ctx, olnk_transport_t transport) {
     if (ctx == NULL) {
-        return ILNK_ERR_INVALID_ARG;
+        return OLNK_ERR_INVALID_ARG;
     }
     memset(ctx, 0, sizeof(*ctx));
     ctx->transport = transport;
-    ctx->state = (uint8_t)ILNK_STATE_SEARCH_SYNC;
-    return ILNK_OK;
+    ctx->state = (uint8_t)OLNK_STATE_SEARCH_SYNC;
+    return OLNK_OK;
 }
 
-void ilnk_reset(ilnk_ctx_t *ctx) {
+void olnk_reset(olnk_ctx_t *ctx) {
     if (ctx == NULL) {
         return;
     }
     ctx->rx_len = 0U;
     ctx->expected_frame_len = 0U;
-    ctx->state = (uint8_t)ILNK_STATE_SEARCH_SYNC;
+    ctx->state = (uint8_t)OLNK_STATE_SEARCH_SYNC;
 }
 
-void ilnk_set_frame_handler(
-    ilnk_ctx_t *ctx,
-    ilnk_frame_handler_t handler,
+void olnk_set_frame_handler(
+    olnk_ctx_t *ctx,
+    olnk_frame_handler_t handler,
     void *user_data
 ) {
     if (ctx == NULL) {
@@ -37,8 +37,8 @@ void ilnk_set_frame_handler(
     ctx->on_frame_user_data = user_data;
 }
 
-ilnk_status_t ilnk_feed_bytes(
-    ilnk_ctx_t *ctx,
+olnk_status_t olnk_feed_bytes(
+    olnk_ctx_t *ctx,
     const uint8_t *data,
     size_t len,
     size_t *bytes_processed
@@ -46,7 +46,7 @@ ilnk_status_t ilnk_feed_bytes(
     size_t i = 0U;
 
     if ((ctx == NULL) || ((data == NULL) && (len > 0U))) {
-        return ILNK_ERR_INVALID_ARG;
+        return OLNK_ERR_INVALID_ARG;
     }
 
     if (bytes_processed != NULL) {
@@ -57,19 +57,19 @@ ilnk_status_t ilnk_feed_bytes(
         uint8_t byte = data[i];
         ++i;
 
-        switch ((ilnk_state_t)ctx->state) {
-            case ILNK_STATE_SEARCH_SYNC:
+        switch ((olnk_state_t)ctx->state) {
+            case OLNK_STATE_SEARCH_SYNC:
                 if (ctx->rx_len == 0U) {
-                    if (byte == ILNK_SYNC_BYTE_0) {
+                    if (byte == OLNK_SYNC_BYTE_0) {
                         ctx->rx_buffer[0] = byte;
                         ctx->rx_len = 1U;
                     }
                 } else {
-                    if (byte == ILNK_SYNC_BYTE_1) {
+                    if (byte == OLNK_SYNC_BYTE_1) {
                         ctx->rx_buffer[1] = byte;
                         ctx->rx_len = 2U;
-                        ctx->state = (uint8_t)ILNK_STATE_READ_HEADER;
-                    } else if (byte == ILNK_SYNC_BYTE_0) {
+                        ctx->state = (uint8_t)OLNK_STATE_READ_HEADER;
+                    } else if (byte == OLNK_SYNC_BYTE_0) {
                         /* Overlapping sync preamble (e.g. 0x55, 0x55, 0xAA) */
                         ctx->rx_buffer[0] = byte;
                         ctx->rx_len = 1U;
@@ -79,46 +79,46 @@ ilnk_status_t ilnk_feed_bytes(
                 }
                 break;
 
-            case ILNK_STATE_READ_HEADER:
+            case OLNK_STATE_READ_HEADER:
                 ctx->rx_buffer[ctx->rx_len] = byte;
                 ctx->rx_len += 1U;
 
-                if (ctx->rx_len == ILNK_HEADER_SIZE) {
-                    uint16_t payload_len = ilnk_read_u16_le(&ctx->rx_buffer[4]);
-                    if (payload_len > ILNK_MAX_PAYLOAD_SIZE) {
+                if (ctx->rx_len == OLNK_HEADER_SIZE) {
+                    uint16_t payload_len = olnk_read_u16_le(&ctx->rx_buffer[4]);
+                    if (payload_len > OLNK_MAX_PAYLOAD_SIZE) {
                         ctx->frames_rx_err += 1U;
-                        ilnk_reset(ctx);
+                        olnk_reset(ctx);
                         if (bytes_processed != NULL) {
                             *bytes_processed = i;
                         }
-                        return ILNK_ERR_BUFFER_OVERFLOW;
+                        return OLNK_ERR_BUFFER_OVERFLOW;
                     }
                     ctx->expected_frame_len =
-                        (uint16_t)(ILNK_HEADER_SIZE + payload_len + ILNK_CHECKSUM_SIZE);
-                    ctx->state = (uint8_t)ILNK_STATE_READ_PAYLOAD;
+                        (uint16_t)(OLNK_HEADER_SIZE + payload_len + OLNK_CHECKSUM_SIZE);
+                    ctx->state = (uint8_t)OLNK_STATE_READ_PAYLOAD;
                 }
                 break;
 
-            case ILNK_STATE_READ_PAYLOAD:
-                if (ctx->rx_len >= ILNK_RX_BUFFER_SIZE) {
+            case OLNK_STATE_READ_PAYLOAD:
+                if (ctx->rx_len >= OLNK_RX_BUFFER_SIZE) {
                     ctx->frames_rx_err += 1U;
-                    ilnk_reset(ctx);
+                    olnk_reset(ctx);
                     if (bytes_processed != NULL) {
                         *bytes_processed = i;
                     }
-                    return ILNK_ERR_BUFFER_OVERFLOW;
+                    return OLNK_ERR_BUFFER_OVERFLOW;
                 }
 
                 ctx->rx_buffer[ctx->rx_len] = byte;
                 ctx->rx_len += 1U;
 
                 if (ctx->rx_len == (size_t)ctx->expected_frame_len) {
-                    ilnk_frame_t frame;
-                    ilnk_status_t st;
+                    olnk_frame_t frame;
+                    olnk_status_t st;
 
-                    ctx->state = (uint8_t)ILNK_STATE_EXEC_CMD;
-                    st = ilnk_frame_decode(ctx->rx_buffer, ctx->rx_len, &frame);
-                    if (st == ILNK_OK) {
+                    ctx->state = (uint8_t)OLNK_STATE_EXEC_CMD;
+                    st = olnk_frame_decode(ctx->rx_buffer, ctx->rx_len, &frame);
+                    if (st == OLNK_OK) {
                         ctx->seq_num = frame.sequence_number;
                         ctx->frames_rx_ok += 1U;
                         if (ctx->on_frame != NULL) {
@@ -128,7 +128,7 @@ ilnk_status_t ilnk_feed_bytes(
                         ctx->frames_rx_err += 1U;
                     }
 
-                    ilnk_reset(ctx);
+                    olnk_reset(ctx);
                     if (bytes_processed != NULL) {
                         *bytes_processed = i;
                     }
@@ -136,9 +136,9 @@ ilnk_status_t ilnk_feed_bytes(
                 }
                 break;
 
-            case ILNK_STATE_EXEC_CMD:
+            case OLNK_STATE_EXEC_CMD:
             default:
-                ilnk_reset(ctx);
+                olnk_reset(ctx);
                 break;
         }
     }
@@ -146,35 +146,35 @@ ilnk_status_t ilnk_feed_bytes(
     if (bytes_processed != NULL) {
         *bytes_processed = i;
     }
-    return ILNK_ERR_NEED_DATA;
+    return OLNK_ERR_NEED_DATA;
 }
 
-ilnk_status_t ilnk_poll(ilnk_ctx_t *ctx) {
-    uint8_t chunk[ILNK_POLL_CHUNK_SIZE];
+olnk_status_t olnk_poll(olnk_ctx_t *ctx) {
+    uint8_t chunk[OLNK_POLL_CHUNK_SIZE];
     int nread;
     size_t offset = 0U;
-    ilnk_status_t last_status = ILNK_ERR_NEED_DATA;
+    olnk_status_t last_status = OLNK_ERR_NEED_DATA;
 
     if (ctx == NULL) {
-        return ILNK_ERR_INVALID_ARG;
+        return OLNK_ERR_INVALID_ARG;
     }
     if (ctx->transport.read == NULL) {
-        return ILNK_ERR_HAL_TIMEOUT;
+        return OLNK_ERR_HAL_TIMEOUT;
     }
 
     nread = ctx->transport.read(
         chunk,
         sizeof(chunk),
-        ILNK_DEFAULT_POLL_MS,
+        OLNK_DEFAULT_POLL_MS,
         ctx->transport.user_data
     );
     if (nread <= 0) {
-        return ILNK_ERR_HAL_TIMEOUT;
+        return OLNK_ERR_HAL_TIMEOUT;
     }
 
     while (offset < (size_t)nread) {
         size_t consumed = 0U;
-        last_status = ilnk_feed_bytes(
+        last_status = olnk_feed_bytes(
             ctx,
             &chunk[offset],
             (size_t)nread - offset,
@@ -184,34 +184,34 @@ ilnk_status_t ilnk_poll(ilnk_ctx_t *ctx) {
             break;
         }
         offset += consumed;
-        if (last_status == ILNK_OK) {
-            return ILNK_OK;
+        if (last_status == OLNK_OK) {
+            return OLNK_OK;
         }
     }
 
     return last_status;
 }
 
-ilnk_status_t ilnk_send_frame(
-    ilnk_ctx_t *ctx,
-    const ilnk_frame_t *frame,
+olnk_status_t olnk_send_frame(
+    olnk_ctx_t *ctx,
+    const olnk_frame_t *frame,
     uint8_t *tx_scratch,
     size_t tx_scratch_cap,
     uint32_t timeout_ms
 ) {
     size_t wire_len = 0U;
     size_t sent = 0U;
-    ilnk_status_t st;
+    olnk_status_t st;
 
     if ((ctx == NULL) || (frame == NULL) || (tx_scratch == NULL)) {
-        return ILNK_ERR_INVALID_ARG;
+        return OLNK_ERR_INVALID_ARG;
     }
     if (ctx->transport.write == NULL) {
-        return ILNK_ERR_HAL_TIMEOUT;
+        return OLNK_ERR_HAL_TIMEOUT;
     }
 
-    st = ilnk_frame_encode(frame, tx_scratch, tx_scratch_cap, &wire_len);
-    if (st != ILNK_OK) {
+    st = olnk_frame_encode(frame, tx_scratch, tx_scratch_cap, &wire_len);
+    if (st != OLNK_OK) {
         return st;
     }
 
@@ -223,10 +223,10 @@ ilnk_status_t ilnk_send_frame(
             ctx->transport.user_data
         );
         if (written <= 0) {
-            return ILNK_ERR_HAL_TIMEOUT;
+            return OLNK_ERR_HAL_TIMEOUT;
         }
         sent += (size_t)written;
     }
 
-    return ILNK_OK;
+    return OLNK_OK;
 }

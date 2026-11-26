@@ -73,7 +73,7 @@ All multi-byte integers are **Little-Endian (`le`)**. The authoritative machine-
 
 ## 4. Protocol Transactions & State Machine
 
-### 4.1 Receiver State Machine (`libinterlnk`)
+### 4.1 Receiver State Machine (`libopenlnk`)
 
 ```
 [SEARCH_SYNC] --(0x55, 0xAA)--> [READ_HEADER] --(4 bytes, len <= max)--> [READ_PAYLOAD]

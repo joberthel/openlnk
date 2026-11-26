@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS
-        "../cleanroom/src/interlnk.c"
+        "../cleanroom/src/openlnk.c"
         "../cleanroom/src/crc16.c"
         "../cleanroom/src/protocol.c"
         "../cleanroom/src/storage_mem.c"

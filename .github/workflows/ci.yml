@@ -74,19 +74,19 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake -S cleanroom -B cleanroom/build
 
-      - name: Build libinterlnk & desktop tools
+      - name: Build libopenlnk & desktop tools
         run: cmake --build cleanroom/build --config Release
 
       - name: Run C99 unit, loopback & fault-injection tests
         run: ctest --test-dir cleanroom/build -C Release --output-on-failure
 
-      - name: Run ilnk-server self-test
+      - name: Run opensvr self-test
         shell: bash
         run: |
-          if [ -x cleanroom/build/ilnk-server ]; then
-            ./cleanroom/build/ilnk-server --self-test
+          if [ -x cleanroom/build/opensvr ]; then
+            ./cleanroom/build/opensvr --self-test
           else
-            ./cleanroom/build/Release/ilnk-server.exe --self-test
+            ./cleanroom/build/Release/opensvr.exe --self-test
           fi
 
   dos-16bit-watcom:
@@ -109,24 +109,26 @@ jobs:
           curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/owsnapshot.tar.xz" \
             | sudo tar -xJf - -C /opt/watcom
 
-      - name: Cross-compile 16-bit DOS INTERSVR.EXE & driver object
+      - name: Cross-compile 16-bit DOS OPENSVR.EXE, OPENLNK.EXE & OPENLNK.SYS driver object
         env:
           WATCOM: /opt/watcom
           INCLUDE: /opt/watcom/h
         run: |
           export PATH="$WATCOM/binl64:$PATH"
           make -C cleanroom/dos -f Makefile.watcom
-          test -f cleanroom/dos/build/INTERSVR.EXE
-          test -f cleanroom/dos/build/interlnk_sys_stub.obj
-          python3 -c "data=open('cleanroom/dos/build/INTERSVR.EXE','rb').read(2); assert data==b'MZ', f'Expected DOS MZ header, got {data!r}'; print('Verified DOS MZ executable header')"
+          test -f cleanroom/dos/build/OPENSVR.EXE
+          test -f cleanroom/dos/build/OPENLNK.EXE
+          test -f cleanroom/dos/build/openlnk_sys_stub.obj
+          python3 -c "for bin_path in ('cleanroom/dos/build/OPENSVR.EXE', 'cleanroom/dos/build/OPENLNK.EXE'): data=open(bin_path,'rb').read(2); assert data==b'MZ', f'Expected DOS MZ header in {bin_path}, got {data!r}'; print(f'Verified DOS MZ header: {bin_path}')"
 
       - name: Upload 16-bit DOS build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dos-16bit-binaries
+          name: openlnk-dos-16bit-binaries
           path: |
-            cleanroom/dos/build/INTERSVR.EXE
-            cleanroom/dos/build/interlnk_sys_stub.obj
+            cleanroom/dos/build/OPENSVR.EXE
+            cleanroom/dos/build/OPENLNK.EXE
+            cleanroom/dos/build/openlnk_sys_stub.obj
 
   kaitai-and-vectors:
     name: Kaitai Struct & Differential Test Vectors
@@ -162,13 +164,13 @@ jobs:
       - name: Build C99 vector validator
         run: |
           cmake -S cleanroom -B cleanroom/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build cleanroom/build --target ilnk-vector-check
+          cmake --build cleanroom/build --target openlnk-vector-check
 
       - name: Validate JSON test vectors (Kaitai + C99 parity)
         run: |
           python3 tests/harness/test_runner.py \
             --require-kaitai \
-            --c-binary cleanroom/build/ilnk-vector-check
+            --c-binary cleanroom/build/openlnk-vector-check
 
   python-tooling-tests:
     name: Python Harness, Sniffer & Verifier Tests

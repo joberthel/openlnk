@@ -1,5 +1,9 @@
 # cleanroom/dos/Makefile.watcom
-# Cross-compile libinterlnk 16-bit Real-Mode MS-DOS binaries using Open Watcom v2
+# Cross-compile libopenlnk 16-bit Real-Mode MS-DOS targets (8.3 compliant)
+# using Open Watcom v2:
+#   - OPENSVR.EXE        (16-bit DOS server)
+#   - OPENLNK.EXE        (16-bit DOS client CLI)
+#   - openlnk_sys_stub.obj (OPENLNK.SYS DOS block device driver core object)
 #
 # Expected environment:
 #   WATCOM=/opt/watcom
@@ -10,25 +14,25 @@ CC      = wcc
 WLINK   = wlink
 WLIB    = wlib
 
-# -ms : Small memory model (16-bit near code & near data, 8086/8088 compatible)
-# -0  : 8086/8088 instruction set (also runs on NEC V30)
+# -ms   : Small memory model (16-bit near code & near data, 8086/8088 compatible)
+# -0    : 8086/8088 instruction set (also runs on NEC V30)
 # -za99 : Strict ISO C99 mode
-# -wx : Maximum warning level
-# -we : Treat warnings as errors
-# -os : Optimize for size
+# -wx   : Maximum warning level
+# -we   : Treat warnings as errors
+# -os   : Optimize for size
 CFLAGS  = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
 
 BUILD_DIR = build
 
-CORE_OBJS = $(BUILD_DIR)/interlnk.obj $(BUILD_DIR)/crc16.obj $(BUILD_DIR)/protocol.obj $(BUILD_DIR)/storage_mem.obj
+CORE_OBJS = $(BUILD_DIR)/openlnk.obj $(BUILD_DIR)/crc16.obj $(BUILD_DIR)/protocol.obj $(BUILD_DIR)/storage_mem.obj
 
-all: $(BUILD_DIR) $(BUILD_DIR)/INTERSVR.EXE $(BUILD_DIR)/interlnk_sys_stub.obj
+all: $(BUILD_DIR) $(BUILD_DIR)/OPENSVR.EXE $(BUILD_DIR)/OPENLNK.EXE $(BUILD_DIR)/openlnk_sys_stub.obj
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/interlnk.obj: ../src/interlnk.c
-	$(CC) $(CFLAGS) -fo=$@ ../src/interlnk.c
+$(BUILD_DIR)/openlnk.obj: ../src/openlnk.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/openlnk.c
 
 $(BUILD_DIR)/crc16.obj: ../src/crc16.c
 	$(CC) $(CFLAGS) -fo=$@ ../src/crc16.c
@@ -39,17 +43,23 @@ $(BUILD_DIR)/protocol.obj: ../src/protocol.c
 $(BUILD_DIR)/storage_mem.obj: ../src/storage_mem.c
 	$(CC) $(CFLAGS) -fo=$@ ../src/storage_mem.c
 
-$(BUILD_DIR)/libilnk.lib: $(CORE_OBJS)
-	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/interlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj
+$(BUILD_DIR)/libolnk.lib: $(CORE_OBJS)
+	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/openlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj
 
-$(BUILD_DIR)/intersvr_main.obj: intersvr_main.c
-	$(CC) $(CFLAGS) -fo=$@ intersvr_main.c
+$(BUILD_DIR)/opensvr_main.obj: opensvr_main.c
+	$(CC) $(CFLAGS) -fo=$@ opensvr_main.c
 
-$(BUILD_DIR)/interlnk_sys_stub.obj: interlnk_sys_stub.c
-	$(CC) $(CFLAGS) -zl -s -fo=$@ interlnk_sys_stub.c
+$(BUILD_DIR)/openlnk_main.obj: openlnk_main.c
+	$(CC) $(CFLAGS) -fo=$@ openlnk_main.c
 
-$(BUILD_DIR)/INTERSVR.EXE: $(BUILD_DIR)/intersvr_main.obj $(BUILD_DIR)/libilnk.lib
-	$(WLINK) system dos option quiet name $@ file $(BUILD_DIR)/intersvr_main.obj library $(BUILD_DIR)/libilnk.lib
+$(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c
+	$(CC) $(CFLAGS) -zl -s -fo=$@ openlnk_sys_stub.c
+
+$(BUILD_DIR)/OPENSVR.EXE: $(BUILD_DIR)/opensvr_main.obj $(BUILD_DIR)/libolnk.lib
+	$(WLINK) system dos option quiet name $@ file $(BUILD_DIR)/opensvr_main.obj library $(BUILD_DIR)/libolnk.lib
+
+$(BUILD_DIR)/OPENLNK.EXE: $(BUILD_DIR)/openlnk_main.obj $(BUILD_DIR)/libolnk.lib
+	$(WLINK) system dos option quiet name $@ file $(BUILD_DIR)/openlnk_main.obj library $(BUILD_DIR)/libolnk.lib
 
 clean:
 	rm -rf $(BUILD_DIR)

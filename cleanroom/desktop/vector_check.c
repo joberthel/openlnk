@@ -1,10 +1,10 @@
 /* cleanroom/desktop/vector_check.c
  *
  * Clean-room CLI utility that feeds a hex-encoded wire frame through
- * libinterlnk's streaming state machine and prints the decoded structure
+ * libopenlnk's streaming state machine and prints the decoded structure
  * as JSON for cross-verification against Kaitai Struct test vectors.
  */
-#include "interlnk/interlnk.h"
+#include "openlnk/openlnk.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -50,15 +50,15 @@ static int parse_hex(const char *hex, uint8_t *out, size_t out_cap, size_t *out_
     return 0;
 }
 
-static const char *status_name(ilnk_status_t st) {
+static const char *status_name(olnk_status_t st) {
     switch (st) {
-        case ILNK_OK: return "OK";
-        case ILNK_ERR_NEED_DATA: return "NEED_DATA";
-        case ILNK_ERR_INVALID_FRAME: return "INVALID_FRAME";
-        case ILNK_ERR_CHECKSUM_MISMATCH: return "CHECKSUM_MISMATCH";
-        case ILNK_ERR_BUFFER_OVERFLOW: return "BUFFER_OVERFLOW";
-        case ILNK_ERR_HAL_TIMEOUT: return "HAL_TIMEOUT";
-        case ILNK_ERR_INVALID_ARG: return "INVALID_ARG";
+        case OLNK_OK: return "OK";
+        case OLNK_ERR_NEED_DATA: return "NEED_DATA";
+        case OLNK_ERR_INVALID_FRAME: return "INVALID_FRAME";
+        case OLNK_ERR_CHECKSUM_MISMATCH: return "CHECKSUM_MISMATCH";
+        case OLNK_ERR_BUFFER_OVERFLOW: return "BUFFER_OVERFLOW";
+        case OLNK_ERR_HAL_TIMEOUT: return "HAL_TIMEOUT";
+        case OLNK_ERR_INVALID_ARG: return "INVALID_ARG";
         default: return "UNKNOWN";
     }
 }
@@ -74,24 +74,24 @@ static void print_hex_bytes(const uint8_t *buf, size_t len) {
 
 typedef struct {
     bool got_frame;
-    ilnk_frame_t frame;
-    uint8_t data_copy[ILNK_MAX_PAYLOAD_SIZE];
+    olnk_frame_t frame;
+    uint8_t data_copy[OLNK_MAX_PAYLOAD_SIZE];
     size_t data_copy_len;
 } capture_t;
 
-static void capture_frame(const ilnk_frame_t *frame, void *user_data) {
+static void capture_frame(const olnk_frame_t *frame, void *user_data) {
     capture_t *cap = (capture_t *)user_data;
     cap->got_frame = true;
     cap->frame = *frame;
     cap->data_copy_len = 0U;
 
-    if ((frame->frame_type == ILNK_FRAME_CMD_WRITE_SECTOR) &&
+    if ((frame->frame_type == OLNK_FRAME_CMD_WRITE_SECTOR) &&
         (frame->payload.write_sector.data != NULL) &&
         (frame->payload.write_sector.data_len <= sizeof(cap->data_copy))) {
         memcpy(cap->data_copy, frame->payload.write_sector.data, frame->payload.write_sector.data_len);
         cap->data_copy_len = frame->payload.write_sector.data_len;
         cap->frame.payload.write_sector.data = cap->data_copy;
-    } else if ((frame->frame_type == ILNK_FRAME_RESP_READ_DATA) &&
+    } else if ((frame->frame_type == OLNK_FRAME_RESP_READ_DATA) &&
                (frame->payload.read_data.data != NULL) &&
                (frame->payload.read_data.data_len <= sizeof(cap->data_copy))) {
         memcpy(cap->data_copy, frame->payload.read_data.data, frame->payload.read_data.data_len);
@@ -105,10 +105,10 @@ int main(int argc, char **argv) {
     static uint8_t raw[2048];
     size_t raw_len = 0U;
     size_t consumed = 0U;
-    ilnk_transport_t tr;
-    ilnk_ctx_t ctx;
+    olnk_transport_t tr;
+    olnk_ctx_t ctx;
     capture_t cap;
-    ilnk_status_t st;
+    olnk_status_t st;
 
     memset(&tr, 0, sizeof(tr));
     memset(&cap, 0, sizeof(cap));
@@ -127,11 +127,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    (void)ilnk_init(&ctx, tr);
-    ilnk_set_frame_handler(&ctx, capture_frame, &cap);
-    st = ilnk_feed_bytes(&ctx, raw, raw_len, &consumed);
+    (void)olnk_init(&ctx, tr);
+    olnk_set_frame_handler(&ctx, capture_frame, &cap);
+    st = olnk_feed_bytes(&ctx, raw, raw_len, &consumed);
 
-    if ((st != ILNK_OK) || (!cap.got_frame)) {
+    if ((st != OLNK_OK) || (!cap.got_frame)) {
         printf("{\"status\":\"%s\",\"bytes_processed\":%lu}\n",
                status_name(st),
                (unsigned long)consumed);
@@ -146,37 +146,37 @@ int main(int argc, char **argv) {
            (unsigned int)cap.frame.checksum);
 
     switch (cap.frame.frame_type) {
-        case ILNK_FRAME_CMD_INIT:
+        case OLNK_FRAME_CMD_INIT:
             printf("\"client_version\":%u,\"drive_count\":%u",
                    (unsigned int)cap.frame.payload.init.client_version,
                    (unsigned int)cap.frame.payload.init.drive_count);
             break;
-        case ILNK_FRAME_CMD_READ_SECTOR:
+        case OLNK_FRAME_CMD_READ_SECTOR:
             printf("\"drive_index\":%u,\"start_sector\":%lu,\"sector_count\":%u",
                    (unsigned int)cap.frame.payload.read_sector.drive_index,
                    (unsigned long)cap.frame.payload.read_sector.start_sector,
                    (unsigned int)cap.frame.payload.read_sector.sector_count);
             break;
-        case ILNK_FRAME_CMD_WRITE_SECTOR:
+        case OLNK_FRAME_CMD_WRITE_SECTOR:
             printf("\"drive_index\":%u,\"start_sector\":%lu,\"sector_count\":%u,\"data_hex\":",
                    (unsigned int)cap.frame.payload.write_sector.drive_index,
                    (unsigned long)cap.frame.payload.write_sector.start_sector,
                    (unsigned int)cap.frame.payload.write_sector.sector_count);
             print_hex_bytes(cap.data_copy, cap.data_copy_len);
             break;
-        case ILNK_FRAME_RESP_INIT_ACK:
+        case OLNK_FRAME_RESP_INIT_ACK:
             printf("\"server_version\":%u,\"drive_count\":%u,\"status\":%u",
                    (unsigned int)cap.frame.payload.init_ack.server_version,
                    (unsigned int)cap.frame.payload.init_ack.drive_count,
                    (unsigned int)cap.frame.payload.init_ack.status);
             break;
-        case ILNK_FRAME_RESP_READ_DATA:
+        case OLNK_FRAME_RESP_READ_DATA:
             printf("\"drive_index\":%u,\"start_sector\":%lu,\"data_hex\":",
                    (unsigned int)cap.frame.payload.read_data.drive_index,
                    (unsigned long)cap.frame.payload.read_data.start_sector);
             print_hex_bytes(cap.data_copy, cap.data_copy_len);
             break;
-        case ILNK_FRAME_RESP_ERROR:
+        case OLNK_FRAME_RESP_ERROR:
             printf("\"error_code\":%u,\"detail\":%u",
                    (unsigned int)cap.frame.payload.error.error_code,
                    (unsigned int)cap.frame.payload.error.detail);

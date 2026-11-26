@@ -45,10 +45,10 @@ cleanroom/dos/build/
 *.err
 *.map
 *.out
-cleanroom/ilnk-server
-cleanroom/ilnk-client
-cleanroom/ilnk-vector-check
-cleanroom/test_libinterlnk
+cleanroom/opensvr
+cleanroom/openlnk
+cleanroom/openlnk-vector-check
+cleanroom/test_libopenlnk
 
 # Python artifacts
 __pycache__/
