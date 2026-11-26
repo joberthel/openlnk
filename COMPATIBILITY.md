@@ -16,13 +16,13 @@ This document tracks objective verification evidence against the 5-Stage Definit
 
 | Trace File | Baud Rate | Description | Captured | Kaitai Verified | C99 Verified |
 | :--- | :--- | :--- | :---: | :---: | :---: |
-| `tests/traces/01_handshake_9600.hexlog` | `9600` | Initial connect & baud negotiation | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/02_handshake_115200.hexlog` | `115200` | High-speed handshake + `/V` INT 2Fh hook | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/03_rcopy_bootstrap.hexlog` | `2400`/`9600` | `INTERSVR /RCOPY` bare-PC bootstrap transfer | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/04_bpb_query_fat16.hexlog` | `115200` | Drive enumeration, BPB/DPB query, FAT16 | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/05_read_sector_single.hexlog` | `115200` | Sector reads (1 B, 511 B, 512 B, 4096 B, 64 KiB+) | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/06_write_sector_multi.hexlog` | `115200` | Multi-sector writes & integrity verify | `[ ]` | `[ ]` | `[ ]` |
-| `tests/traces/07_media_change_error.hexlog` | `115200` | Media check (`0x01`), write-protect, disk-full | `[ ]` | `[ ]` | `[ ]` |
+| `tests/traces/01_handshake_9600.hexlog` | `9600` | Initial connect & baud negotiation | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/02_handshake_115200.hexlog` | `115200` | High-speed handshake + `/V` INT 2Fh hook | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/03_rcopy_bootstrap.hexlog` | `2400`/`115200` | `INTERSVR /RCOPY` bare-PC bootstrap transfer | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/04_bpb_query_fat16.hexlog` | `115200` | Drive enumeration, BPB/DPB query, FAT16 | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/05_read_sector_single.hexlog` | `115200` | Sector reads (1 B, 511 B, 512 B, 4096 B, 64 KiB+) | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/06_write_sector_multi.hexlog` | `115200` | Multi-sector writes & integrity verify | `[x]` | `[ ]` | `[ ]` |
+| `tests/traces/07_media_change_error.hexlog` | `115200` | Media check (`0x01`), write-protect, disk-full/not-ready | `[x]` | `[ ]` | `[ ]` |
 
 ## 3. Target Platform Build & Verification Status
 
