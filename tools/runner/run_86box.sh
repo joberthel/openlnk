@@ -102,23 +102,13 @@ render_config() {
     fi
 
     if [[ -n "$vhd_path" ]]; then
-        if [[ "$MACHINE_PROFILE" == "486" ]]; then
-            cat >> "$output_cfg" <<EOF
-
-[Hard disks]
-hdd_01_parameters = 17, 4, 306, 0, ide
-hdd_01_fn = ${vhd_path}
-hdd_01_ide_channel = 0:0
-EOF
-        else
-            cat >> "$output_cfg" <<EOF
+        cat >> "$output_cfg" <<EOF
 
 [Hard disks]
 hdd_01_parameters = 17, 4, 306, 0, xta
 hdd_01_fn = ${vhd_path}
 hdd_01_xta_channel = 0
 EOF
-        fi
     fi
 
     if [[ -n "$serial_dev" ]]; then
