@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MODE="client"
+MACHINE_PROFILE="xt"
 BAUD="115200"
 SERIAL_TRANSPORT="pty"
 SERIAL_CLIENT=""
@@ -30,6 +31,7 @@ integration testing.
 
 Options:
   --mode <client|server|dual|oracle>  Execution topology (default: client)
+  --machine <xt|486>                  Hardware profile: xt (NEC V20/8250) or 486 (486DX2/16550A FIFO)
   --baud <rate>                       Target COM1 baud rate (default: 115200)
   --transport <pty|pipe>              COM1 backend: serial_passthrough (pty) or Named Pipe (pipe)
   --serial-client <device|prefix>     Host PTY path or Named Pipe prefix for Client COM1
@@ -50,6 +52,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode) MODE="$2"; shift 2 ;;
+        --machine) MACHINE_PROFILE="$2"; shift 2 ;;
         --baud) BAUD="$2"; shift 2 ;;
         --transport) SERIAL_TRANSPORT="$2"; shift 2 ;;
         --serial-client) SERIAL_CLIENT="$2"; shift 2 ;;
@@ -99,13 +102,23 @@ render_config() {
     fi
 
     if [[ -n "$vhd_path" ]]; then
-        cat >> "$output_cfg" <<EOF
+        if [[ "$MACHINE_PROFILE" == "486" ]]; then
+            cat >> "$output_cfg" <<EOF
+
+[Hard disks]
+hdd_01_parameters = 17, 4, 306, 0, ide
+hdd_01_fn = ${vhd_path}
+hdd_01_ide_channel = 0:0
+EOF
+        else
+            cat >> "$output_cfg" <<EOF
 
 [Hard disks]
 hdd_01_parameters = 17, 4, 306, 0, xta
 hdd_01_fn = ${vhd_path}
 hdd_01_xta_channel = 0
 EOF
+        fi
     fi
 
     if [[ -n "$serial_dev" ]]; then
@@ -150,13 +163,24 @@ EOF
 
 mkdir -p "${WORKDIR}/client" "${WORKDIR}/server"
 
+if [[ "$MACHINE_PROFILE" == "486" ]]; then
+    CLIENT_TEMPLATE="${SCRIPT_DIR}/configs/client_486.cfg"
+    SERVER_TEMPLATE="${SCRIPT_DIR}/configs/server_486.cfg"
+elif [[ "$MACHINE_PROFILE" == "xt" ]]; then
+    CLIENT_TEMPLATE="${SCRIPT_DIR}/configs/client_86box.cfg"
+    SERVER_TEMPLATE="${SCRIPT_DIR}/configs/server_86box.cfg"
+else
+    echo "[run_86box] ERROR: Unknown --machine '${MACHINE_PROFILE}'. Expected xt|486." >&2
+    exit 2
+fi
+
 CLIENT_CFG="${WORKDIR}/client/86box.cfg"
 SERVER_CFG="${WORKDIR}/server/86box.cfg"
 
-render_config "${SCRIPT_DIR}/configs/client_86box.cfg" "$CLIENT_CFG" "$SERIAL_CLIENT" "$CLIENT_VHD" "$CLIENT_FLOPPY"
-render_config "${SCRIPT_DIR}/configs/server_86box.cfg" "$SERVER_CFG" "$SERIAL_SERVER" "$SERVER_VHD" "$SERVER_FLOPPY"
+render_config "$CLIENT_TEMPLATE" "$CLIENT_CFG" "$SERIAL_CLIENT" "$CLIENT_VHD" "$CLIENT_FLOPPY"
+render_config "$SERVER_TEMPLATE" "$SERVER_CFG" "$SERIAL_SERVER" "$SERVER_VHD" "$SERVER_FLOPPY"
 
-echo "[run_86box] Mode=${MODE} Baud=${BAUD} Workdir=${WORKDIR}"
+echo "[run_86box] Mode=${MODE} Machine=${MACHINE_PROFILE} Baud=${BAUD} Workdir=${WORKDIR}"
 echo "[run_86box] Rendered Client CFG: ${CLIENT_CFG} (serial1=${SERIAL_CLIENT:-none})"
 echo "[run_86box] Rendered Server CFG: ${SERVER_CFG} (serial1=${SERIAL_SERVER:-none})"
 
