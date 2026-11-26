@@ -251,10 +251,20 @@ def _write_paced(fd: int, data: bytes, pace_us: int) -> None:
     if pace_us <= 0 or len(data) == 0:
         os.write(fd, data)
         return
-    delay_s = pace_us / 1_000_000.0
+    # Use monotonic nanosecond pacing instead of time.sleep(<1ms), which
+    # suffers from OS timer coalescing on macOS (often overshooting 2-3x).
+    interval_ns = pace_us * 1000
+    next_ts = time.perf_counter_ns()
     for idx in range(len(data)):
+        now = time.perf_counter_ns()
+        if now < next_ts:
+            rem = next_ts - now
+            if rem > 2_000_000:
+                time.sleep((rem - 1_000_000) / 1_000_000_000.0)
+            while time.perf_counter_ns() < next_ts:
+                pass
         os.write(fd, data[idx : idx + 1])
-        time.sleep(delay_s)
+        next_ts = time.perf_counter_ns() + interval_ns
 
 
 def relay_pipe_quad(
