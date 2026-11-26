@@ -14,6 +14,7 @@ add_library(openlnk_static STATIC
     src/crc16.c
     src/protocol.c
     src/storage_mem.c
+    src/server.c
 )
 set_target_properties(openlnk_static PROPERTIES OUTPUT_NAME openlnk)
 add_library(openlnk::openlnk ALIAS openlnk_static)

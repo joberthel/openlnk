@@ -24,7 +24,7 @@ CFLAGS  = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
 
 BUILD_DIR = build
 
-CORE_OBJS = $(BUILD_DIR)/openlnk.obj $(BUILD_DIR)/crc16.obj $(BUILD_DIR)/protocol.obj $(BUILD_DIR)/storage_mem.obj
+CORE_OBJS = $(BUILD_DIR)/openlnk.obj $(BUILD_DIR)/crc16.obj $(BUILD_DIR)/protocol.obj $(BUILD_DIR)/storage_mem.obj $(BUILD_DIR)/server.obj
 
 all: $(BUILD_DIR) $(BUILD_DIR)/OPENSVR.EXE $(BUILD_DIR)/OPENLNK.EXE $(BUILD_DIR)/openlnk_sys_stub.obj
 
@@ -43,8 +43,11 @@ $(BUILD_DIR)/protocol.obj: ../src/protocol.c
 $(BUILD_DIR)/storage_mem.obj: ../src/storage_mem.c
 	$(CC) $(CFLAGS) -fo=$@ ../src/storage_mem.c
 
+$(BUILD_DIR)/server.obj: ../src/server.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/server.c
+
 $(BUILD_DIR)/libolnk.lib: $(CORE_OBJS)
-	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/openlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj
+	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/openlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj +$(BUILD_DIR)/server.obj
 
 $(BUILD_DIR)/opensvr_main.obj: opensvr_main.c
 	$(CC) $(CFLAGS) -fo=$@ opensvr_main.c

@@ -4,6 +4,7 @@ idf_component_register(
         "../cleanroom/src/crc16.c"
         "../cleanroom/src/protocol.c"
         "../cleanroom/src/storage_mem.c"
+        "../cleanroom/src/server.c"
         "src/esp32_hal_uart.c"
     INCLUDE_DIRS
         "../cleanroom/include"

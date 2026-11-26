@@ -27,3 +27,14 @@ uint16_t olnk_crc16_ccitt(const uint8_t *data, size_t len) {
     }
     return crc;
 }
+
+uint16_t olnk_crc16_genibus(const uint8_t *data, size_t len) {
+    return (uint16_t)(olnk_crc16_ccitt(data, len) ^ OLNK_CRC16_XOROUT);
+}
+
+bool olnk_crc16_check_residue(const uint8_t *data_with_crc_be, size_t len) {
+    if ((data_with_crc_be == NULL) || (len < 2U)) {
+        return false;
+    }
+    return olnk_crc16_ccitt(data_with_crc_be, len) == OLNK_CRC16_RESIDUE_GOOD;
+}
