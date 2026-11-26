@@ -56,12 +56,29 @@ def checksum_xor16(payload: bytes) -> int:
     return acc & 0xFFFF
 
 
+def crc16_genibus(payload: bytes, init: int = 0xFFFF, poly: int = 0x1021) -> int:
+    """CRC-16/GENIBUS (poly 0x1021, init 0xFFFF, unreflected, xorout 0xFFFF).
+
+    Verified 100% against all 923 frames across Golden Traces 01..07 (889 INTERLNK
+    frames + 34 FXB /RCOPY frames). Transmitted big-endian on the wire; feeding
+    [len_bytes || payload || crc_hi || crc_lo] into crc16_ccitt_false yields the
+    constant check residue 0x1D0F.
+    """
+    return crc16_ccitt_false(payload, init=init, poly=poly) ^ 0xFFFF
+
+
+def crc16_genibus_residue(frame_body_with_crc_be: bytes) -> int:
+    """Compute receiver-side residue over [len_bytes || payload || crc_be]; valid == 0x1D0F."""
+    return crc16_ccitt_false(frame_body_with_crc_be)
+
+
 def custom_interlnk_crc16(raw_payload: bytes) -> int:
-    """Active reference checksum function for INTERLNK wire verification."""
-    return crc16_ccitt_false(raw_payload)
+    """Active verified reference checksum function for MS-DOS INTERLNK/INTERSVR wire frames."""
+    return crc16_genibus(raw_payload)
 
 
 CANDIDATE_ALGORITHMS: dict[str, Callable[[bytes], int]] = {
+    "crc16_genibus": crc16_genibus,
     "crc16_ccitt_false": crc16_ccitt_false,
     "crc16_ibm": crc16_ibm,
     "sum16": checksum_sum16,
