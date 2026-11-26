@@ -60,13 +60,13 @@ CLIENT_CONFIG_SYS = (
     "LASTDRIVE=Z\r\n"
     "\r\n"
     "[B115200]\r\n"
-    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1:115200\r\n"
+    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1 /BAUD:115200\r\n"
     "\r\n"
     "[B9600]\r\n"
-    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1:9600\r\n"
+    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1 /BAUD:9600\r\n"
     "\r\n"
     "[B115200V]\r\n"
-    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1:115200 /V\r\n"
+    "DEVICE=C:\\DOS\\INTERLNK.EXE /DRIVES:4 /COM1 /BAUD:115200 /V\r\n"
     "\r\n"
     "[CLEAN]\r\n"
 )
@@ -89,7 +89,7 @@ SERVER_AUTOEXEC_BAT = (
     "PROMPT $P$G\r\n"
     "PATH C:\\DOS;C:\\\r\n"
     "ECHO OpenLNK MS-DOS 6.22 Server VM Ready.\r\n"
-    "ECHO Run: INTERSVR C: /COM1 /B:115200  (or INTERSVR /RCOPY)\r\n"
+    "ECHO Run: INTERSVR C: /COM1 /BAUD:115200  (or INTERSVR /RCOPY)\r\n"
 )
 
 SKIP_FILES = {
@@ -534,6 +534,84 @@ def create_single_vhd(
     return {"dos_files": copied_dos, "extras": injected_extras, "kwaj_pending": kwaj_pending}
 
 
+def patch_existing_vhd(
+    src_vhd: Path,
+    dst_vhd: Path,
+    config_sys: str,
+    autoexec_bat: str,
+    include_test_dat: bool,
+) -> None:
+    """Update CONFIG.SYS/AUTOEXEC.BAT on an already-bootable Fixed VHD (preserving MBR/VBR/DOS)."""
+    if sys.platform != "darwin":
+        raise RuntimeError("This helper uses macOS hdiutil/fsck_msdos.")
+
+    raw_bytes = src_vhd.read_bytes()
+    if len(raw_bytes) != DISK_BYTES + 512 or raw_bytes[-512:-504] != b"conectix":
+        raise ValueError(f"Expected 10 MB Fixed-Size VHD at {src_vhd}")
+
+    with tempfile.TemporaryDirectory(prefix="openlnk_patch_") as tmp_str:
+        tmp = Path(tmp_str)
+        raw_img = tmp / "disk.raw"
+        mnt_dir = tmp / "mnt"
+        mnt_dir.mkdir()
+        raw_img.write_bytes(raw_bytes[:DISK_BYTES])
+
+        attach_out = _run(
+            [
+                "hdiutil",
+                "attach",
+                "-imagekey",
+                "diskimage-class=CRawDiskImage",
+                "-nomount",
+                str(raw_img),
+            ]
+        )
+        whole_dev = ""
+        part_dev = ""
+        for line in attach_out.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            dev = parts[0]
+            if not whole_dev:
+                whole_dev = dev
+            if dev.startswith("/dev/disk") and "s1" in dev:
+                part_dev = dev
+        if not whole_dev or not part_dev:
+            raise RuntimeError(f"Failed to parse hdiutil attach output:\n{attach_out}")
+
+        mounted = False
+        try:
+            _run(["mount", "-t", "msdos", "-o", "nobrowse", part_dev, str(mnt_dir)])
+            mounted = True
+
+            (mnt_dir / "CONFIG.SYS").write_bytes(config_sys.encode("ascii"))
+            (mnt_dir / "AUTOEXEC.BAT").write_bytes(autoexec_bat.encode("ascii"))
+            if include_test_dat:
+                pattern = bytes(((i * 37 + 11) & 0xFF) for i in range(16384))
+                (mnt_dir / "TEST.DAT").write_bytes(pattern)
+
+            for junk in (".fseventsd", ".Spotlight-V100", ".Trashes"):
+                jp = mnt_dir / junk
+                if jp.is_dir():
+                    shutil.rmtree(jp, ignore_errors=True)
+                elif jp.is_file():
+                    jp.unlink(missing_ok=True)
+
+            _unmount_with_retry(mnt_dir)
+            mounted = False
+            _run(["/sbin/fsck_msdos", "-n", part_dev])
+        finally:
+            if mounted:
+                subprocess.run(["/usr/sbin/diskutil", "unmount", "force", str(mnt_dir)], check=False, capture_output=True)
+            subprocess.run(["hdiutil", "detach", "-force", whole_dev], check=False, capture_output=True)
+
+        footer = build_vhd_fixed_footer(DISK_BYTES, CYLINDERS, HEADS, SECTORS_PER_TRACK)
+        with raw_img.open("rb") as src, dst_vhd.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+            dst.write(footer)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build 86Box MS-DOS 6.22 Client & Server Fixed-Size VHDs from floppy disks and/or ISO."
@@ -544,6 +622,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=Path,
         nargs="+",
         help="MS-DOS 6.22 1.44 MB setup floppy images (e.g. dos-622-disk1.img disk2.img disk3.img)",
+    )
+    parser.add_argument(
+        "--finalize-from-client",
+        type=Path,
+        help="Patch CONFIG.SYS on an already-bootable client VHD and clone it into dos622_server.vhd",
     )
     parser.add_argument(
         "--out-dir",
@@ -559,8 +642,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.finalize_from_client:
+        src = args.finalize_from_client
+        if not src.is_file():
+            print(f"[create_dos_vhds] ERROR: Client VHD not found: {src}", file=sys.stderr)
+            return 1
+        server_vhd = args.out_dir / "dos622_server.vhd"
+        patch_existing_vhd(src, src, CLIENT_CONFIG_SYS, CLIENT_AUTOEXEC_BAT, include_test_dat=False)
+        print(f"[create_dos_vhds] Updated bootable client VHD: {src}")
+        patch_existing_vhd(src, server_vhd, SERVER_CONFIG_SYS, SERVER_AUTOEXEC_BAT, include_test_dat=True)
+        print(f"[create_dos_vhds] Cloned bootable server VHD : {server_vhd} (with C:\\TEST.DAT)")
+        return 0
+
     if not args.iso and not args.disks:
-        parser.error("Provide --disks and/or --iso.")
+        parser.error("Provide --finalize-from-client, --disks, and/or --iso.")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
