@@ -66,8 +66,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 find_86box() {
-    if command -v 86Box >/dev/null 2>&1; then
+    if [[ -n "${EIGHTYSIXBOX_BIN:-}" && -x "${EIGHTYSIXBOX_BIN}" ]]; then
+        echo "${EIGHTYSIXBOX_BIN}"
+    elif command -v 86Box >/dev/null 2>&1; then
         command -v 86Box
+    elif [[ -x "${HOME}/Applications/86Box.app/Contents/MacOS/86Box" ]]; then
+        echo "${HOME}/Applications/86Box.app/Contents/MacOS/86Box"
     elif [[ -x "/Applications/86Box.app/Contents/MacOS/86Box" ]]; then
         echo "/Applications/86Box.app/Contents/MacOS/86Box"
     elif command -v 86box >/dev/null 2>&1; then
@@ -124,7 +128,7 @@ if [[ -z "$EIGHTYSIXBOX_BIN" ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
         EIGHTYSIXBOX_BIN="86Box"
     else
-        echo "[run_86box] ERROR: 86Box binary not found in PATH or /Applications/86Box.app." >&2
+        echo "[run_86box] ERROR: 86Box binary not found in PATH, ~/Applications/86Box.app, or /Applications/86Box.app." >&2
         echo "[run_86box] Install 86Box v4.x or run with --dry-run / --generate-config." >&2
         exit 1
     fi
