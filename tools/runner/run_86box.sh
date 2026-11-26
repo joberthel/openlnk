@@ -106,11 +106,10 @@ EOF
     fi
 
     if [[ -n "$serial_dev" ]]; then
-        # Enable serial1 passthrough in [Ports (COM & LPT)] and append device block
+        # Enable serial1 passthrough in [Ports (COM & LPT)] using 86Box v4/v5 keys
         awk '
             /^serial1_enabled = 1$/ {
-                print
-                print "serial1_passthrough_enabled = 1"
+                print "serial1_device = serial_passthrough"
                 next
             }
             { print }
@@ -118,9 +117,9 @@ EOF
 
         cat >> "$output_cfg" <<EOF
 
-[Serial Passthrough Device #1]
+[Serial Passthrough (COM) #1]
 mode = 3
-host_serial_path = ${serial_dev}
+path = ${serial_dev}
 baudrate = ${BAUD}
 data_bits = 8
 stop_bits = 1
