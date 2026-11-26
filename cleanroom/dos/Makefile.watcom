@@ -1,0 +1,55 @@
+# cleanroom/dos/Makefile.watcom
+# Cross-compile libinterlnk 16-bit Real-Mode MS-DOS binaries using Open Watcom v2
+#
+# Expected environment:
+#   WATCOM=/opt/watcom
+#   PATH=$WATCOM/binl64:$PATH
+#   INCLUDE=$WATCOM/h
+
+CC      = wcc
+WLINK   = wlink
+WLIB    = wlib
+
+# -ms : Small memory model (16-bit near code & near data, 8086/8088 compatible)
+# -0  : 8086/8088 instruction set (also runs on NEC V30)
+# -za99 : Strict ISO C99 mode
+# -wx : Maximum warning level
+# -we : Treat warnings as errors
+# -os : Optimize for size
+CFLAGS  = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
+
+BUILD_DIR = build
+
+CORE_OBJS = $(BUILD_DIR)/interlnk.obj $(BUILD_DIR)/crc16.obj $(BUILD_DIR)/protocol.obj $(BUILD_DIR)/storage_mem.obj
+
+all: $(BUILD_DIR) $(BUILD_DIR)/INTERSVR.EXE $(BUILD_DIR)/interlnk_sys_stub.obj
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/interlnk.obj: ../src/interlnk.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/interlnk.c
+
+$(BUILD_DIR)/crc16.obj: ../src/crc16.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/crc16.c
+
+$(BUILD_DIR)/protocol.obj: ../src/protocol.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/protocol.c
+
+$(BUILD_DIR)/storage_mem.obj: ../src/storage_mem.c
+	$(CC) $(CFLAGS) -fo=$@ ../src/storage_mem.c
+
+$(BUILD_DIR)/libilnk.lib: $(CORE_OBJS)
+	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/interlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj
+
+$(BUILD_DIR)/intersvr_main.obj: intersvr_main.c
+	$(CC) $(CFLAGS) -fo=$@ intersvr_main.c
+
+$(BUILD_DIR)/interlnk_sys_stub.obj: interlnk_sys_stub.c
+	$(CC) $(CFLAGS) -zl -s -fo=$@ interlnk_sys_stub.c
+
+$(BUILD_DIR)/INTERSVR.EXE: $(BUILD_DIR)/intersvr_main.obj $(BUILD_DIR)/libilnk.lib
+	$(WLINK) system dos option quiet name $@ file $(BUILD_DIR)/intersvr_main.obj library $(BUILD_DIR)/libilnk.lib
+
+clean:
+	rm -rf $(BUILD_DIR)

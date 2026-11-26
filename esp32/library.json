@@ -1,0 +1,31 @@
+{
+  "name": "libinterlnk",
+  "version": "0.1.0",
+  "description": "Clean-room allocation-free C99 MS-DOS INTERLNK/INTERSVR serial/SD block server library",
+  "keywords": [
+    "msdos",
+    "interlnk",
+    "intersvr",
+    "serial",
+    "rs232",
+    "retrocomputing",
+    "fat16"
+  ],
+  "license": "MIT",
+  "frameworks": [
+    "espidf",
+    "arduino"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "build": {
+    "flags": [
+      "-std=c99",
+      "-I../cleanroom/include",
+      "-Iinclude"
+    ],
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}
