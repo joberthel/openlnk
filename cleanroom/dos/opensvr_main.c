@@ -3,7 +3,7 @@
  * 16-bit Real-Mode MS-DOS OPENSVR.EXE clean-room server entry target
  * compiled with Open Watcom v2 (-ms small memory model, 8086/8088 safe).
  */
-#include "openlnk/openlnk.h"
+#include "openlnk/server.h"
 #include "openlnk/storage.h"
 
 #include <stdio.h>
@@ -30,32 +30,33 @@ static bool dos_null_set_baud(uint32_t baudrate, void *user_data) {
     return true;
 }
 
+/* Keep large server/drive buffers static (never on 16-bit Real-Mode stack) */
+static olnk_server_t g_dos_server;
+static uint8_t g_dos_ramdisk[OLNK_SECTOR_SIZE * 2U];
+
 int main(void) {
-    static olnk_ctx_t ctx;
-    static uint8_t tx_buf[64];
     olnk_transport_t tr;
-    olnk_frame_t ack;
+    olnk_mem_drive_t drv;
+    const uint8_t sync_probe[3] = { OLNK_SYNC_C1, OLNK_SYNC_C2, OLNK_SYNC_C3 };
 
     tr.read = dos_null_read;
     tr.write = dos_null_write;
     tr.set_baud = dos_null_set_baud;
     tr.user_data = NULL;
 
-    if (olnk_init(&ctx, tr) != OLNK_OK) {
+    olnk_fat_build_synthetic_vbr(g_dos_ramdisk, 2UL, 0xF0U, "OPENSVR_DOS", 0x06220001UL);
+    olnk_mem_drive_init(&drv, g_dos_ramdisk, 2UL);
+
+    if (olnk_server_init(&g_dos_server, tr, olnk_mem_drive_ops(&drv)) != OLNK_OK) {
         return 1;
     }
 
-    memset(&ack, 0, sizeof(ack));
-    ack.frame_type = OLNK_FRAME_RESP_INIT_ACK;
-    ack.sequence_number = 0U;
-    ack.payload.init_ack.server_version = 0x0622U;
-    ack.payload.init_ack.drive_count = 1U;
-    ack.payload.init_ack.status = 0U;
-
-    if (olnk_send_frame(&ctx, &ack, tx_buf, sizeof(tx_buf), 100U) != OLNK_OK) {
+    /* Verify Phase A sync state machine transitions cleanly on 16-bit target */
+    olnk_server_feed_bytes(&g_dos_server, sync_probe, sizeof(sync_probe));
+    if (g_dos_server.link.link_state != (uint8_t)OLNK_LINK_CONNECTED) {
         return 2;
     }
 
-    printf("OPENSVR (libopenlnk 16-bit Real-Mode C99 server ready)\n");
+    printf("OPENSVR (libopenlnk 16-bit Real-Mode MS-DOS 6.22 server ready)\n");
     return 0;
 }

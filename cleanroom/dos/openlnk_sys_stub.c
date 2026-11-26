@@ -29,10 +29,10 @@ void olnk_dos_interrupt(void) {
 }
 
 const dos_block_driver_header_t olnk_dos_header = {
-    0xFFFFFFFFUL, /* Last driver in chain */
-    0x0802U,      /* Block device, Open/Close/RM + 32-bit sector addressing */
-    0x0000U,      /* Strategy offset (linked in assembly stub) */
-    0x0000U,      /* Interrupt offset (linked in assembly stub) */
-    1U,           /* 1 redirected remote block unit */
+    0xFFFFFFFFUL,            /* Last driver in chain */
+    OLNK_DRIVE_ATTR_DEFAULT, /* Block device, Open/Close/RM + Generic IOCTL + 32-bit LBA */
+    0x0000U,                 /* Strategy offset (linked in assembly stub) */
+    0x0000U,                 /* Interrupt offset (linked in assembly stub) */
+    1U,                      /* 1 redirected remote block unit */
     { 'O', 'P', 'E', 'N', 'L', 'N', 'K' }
 };

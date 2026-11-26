@@ -29,31 +29,37 @@ static bool dos_cli_set_baud(uint32_t baudrate, void *user_data) {
     return true;
 }
 
+static olnk_ctx_t g_dos_client;
+static uint8_t g_dos_wire_buf[64];
+
 int main(void) {
-    static olnk_ctx_t ctx;
-    static uint8_t tx_buf[64];
     olnk_transport_t tr;
-    olnk_frame_t req;
+    olnk_sync_trigger_t trig = { OLNK_OP_SESSION_SYNC, 0U };
+    uint8_t payload[OLNK_LEN_SYNC_TRIGGER];
+    size_t payload_len = 0U;
+    size_t wire_len = 0U;
+    olnk_wire_frame_t decoded;
 
     tr.read = dos_cli_read;
     tr.write = dos_cli_write;
     tr.set_baud = dos_cli_set_baud;
     tr.user_data = NULL;
 
-    if (olnk_init(&ctx, tr) != OLNK_OK) {
+    if (olnk_init(&g_dos_client, tr) != OLNK_OK) {
         return 1;
     }
 
-    memset(&req, 0, sizeof(req));
-    req.frame_type = OLNK_FRAME_CMD_INIT;
-    req.sequence_number = 0U;
-    req.payload.init.client_version = 0x0622U;
-    req.payload.init.drive_count = 4U;
-
-    if (olnk_send_frame(&ctx, &req, tx_buf, sizeof(tx_buf), 100U) != OLNK_OK) {
+    if (olnk_encode_sync_trigger(&trig, payload, sizeof(payload), &payload_len) != OLNK_OK) {
         return 2;
     }
+    if (olnk_wire_frame_encode(0U, false, false, payload, (uint16_t)payload_len,
+                               g_dos_wire_buf, sizeof(g_dos_wire_buf), &wire_len) != OLNK_OK) {
+        return 3;
+    }
+    if (olnk_wire_frame_decode(g_dos_wire_buf, wire_len, &decoded, NULL) != OLNK_OK) {
+        return 4;
+    }
 
-    printf("OPENLNK (libopenlnk 16-bit Real-Mode C99 client ready)\n");
+    printf("OPENLNK (libopenlnk 16-bit Real-Mode MS-DOS 6.22 client ready)\n");
     return 0;
 }

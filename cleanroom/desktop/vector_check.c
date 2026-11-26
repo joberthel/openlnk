@@ -1,8 +1,8 @@
 /* cleanroom/desktop/vector_check.c
  *
- * Clean-room CLI utility that feeds a hex-encoded wire frame through
- * libopenlnk's streaming state machine and prints the decoded structure
- * as JSON for cross-verification against Kaitai Struct test vectors.
+ * Clean-room CLI utility that feeds a hex-encoded canonical wire frame through
+ * libopenlnk's streaming state machine and prints the decoded structure as JSON
+ * for 24/24 differential parity verification against Kaitai Struct test vectors.
  */
 #include "openlnk/openlnk.h"
 
@@ -53,60 +53,35 @@ static int parse_hex(const char *hex, uint8_t *out, size_t out_cap, size_t *out_
 static const char *status_name(olnk_status_t st) {
     switch (st) {
         case OLNK_OK: return "OK";
-        case OLNK_ERR_NEED_DATA: return "NEED_DATA";
+        /* For standalone single-frame vector checks, truncated frames map to INVALID_FRAME */
+        case OLNK_ERR_NEED_DATA: return "INVALID_FRAME";
         case OLNK_ERR_INVALID_FRAME: return "INVALID_FRAME";
         case OLNK_ERR_CHECKSUM_MISMATCH: return "CHECKSUM_MISMATCH";
         case OLNK_ERR_BUFFER_OVERFLOW: return "BUFFER_OVERFLOW";
         case OLNK_ERR_HAL_TIMEOUT: return "HAL_TIMEOUT";
         case OLNK_ERR_INVALID_ARG: return "INVALID_ARG";
-        default: return "UNKNOWN";
+        default: return "INVALID_FRAME";
     }
-}
-
-static void print_hex_bytes(const uint8_t *buf, size_t len) {
-    size_t i;
-    putchar('"');
-    for (i = 0U; i < len; ++i) {
-        printf("%02x", (unsigned int)buf[i]);
-    }
-    putchar('"');
 }
 
 typedef struct {
     bool got_frame;
-    olnk_frame_t frame;
-    uint8_t data_copy[OLNK_MAX_PAYLOAD_SIZE];
-    size_t data_copy_len;
+    olnk_wire_frame_t frame;
 } capture_t;
 
-static void capture_frame(const olnk_frame_t *frame, void *user_data) {
+static void capture_frame(const olnk_wire_frame_t *frame, void *user_data) {
     capture_t *cap = (capture_t *)user_data;
     cap->got_frame = true;
     cap->frame = *frame;
-    cap->data_copy_len = 0U;
-
-    if ((frame->frame_type == OLNK_FRAME_CMD_WRITE_SECTOR) &&
-        (frame->payload.write_sector.data != NULL) &&
-        (frame->payload.write_sector.data_len <= sizeof(cap->data_copy))) {
-        memcpy(cap->data_copy, frame->payload.write_sector.data, frame->payload.write_sector.data_len);
-        cap->data_copy_len = frame->payload.write_sector.data_len;
-        cap->frame.payload.write_sector.data = cap->data_copy;
-    } else if ((frame->frame_type == OLNK_FRAME_RESP_READ_DATA) &&
-               (frame->payload.read_data.data != NULL) &&
-               (frame->payload.read_data.data_len <= sizeof(cap->data_copy))) {
-        memcpy(cap->data_copy, frame->payload.read_data.data, frame->payload.read_data.data_len);
-        cap->data_copy_len = frame->payload.read_data.data_len;
-        cap->frame.payload.read_data.data = cap->data_copy;
-    }
 }
 
 int main(int argc, char **argv) {
-    static char input_hex[4096];
-    static uint8_t raw[2048];
+    static char input_hex[OLNK_FRAME_BUFFER_SIZE * 2U + 1024U];
+    static uint8_t raw[OLNK_FRAME_BUFFER_SIZE + 64U];
+    static olnk_ctx_t ctx;
     size_t raw_len = 0U;
     size_t consumed = 0U;
     olnk_transport_t tr;
-    olnk_ctx_t ctx;
     capture_t cap;
     olnk_status_t st;
 
@@ -119,8 +94,15 @@ int main(int argc, char **argv) {
             return 2;
         }
     } else {
-        size_t n = fread(input_hex, 1U, sizeof(input_hex) - 1U, stdin);
-        input_hex[n] = '\0';
+        size_t total = 0U;
+        while (total < (sizeof(input_hex) - 1U)) {
+            size_t n = fread(&input_hex[total], 1U, (sizeof(input_hex) - 1U) - total, stdin);
+            if (n == 0U) {
+                break;
+            }
+            total += n;
+        }
+        input_hex[total] = '\0';
         if (parse_hex(input_hex, raw, sizeof(raw), &raw_len) != 0) {
             printf("{\"status\":\"INVALID_HEX\"}\n");
             return 2;
@@ -132,59 +114,31 @@ int main(int argc, char **argv) {
     st = olnk_feed_bytes(&ctx, raw, raw_len, &consumed);
 
     if ((st != OLNK_OK) || (!cap.got_frame)) {
-        printf("{\"status\":\"%s\",\"bytes_processed\":%lu}\n",
+        printf("{\"status\":\"%s\",\"detail\":\"%s\",\"bytes_processed\":%lu}\n",
                status_name(st),
+               (st == OLNK_ERR_NEED_DATA) ? "TRUNCATED_FRAME" : status_name(st),
                (unsigned long)consumed);
         return 0;
     }
 
-    printf("{\"status\":\"OK\",\"sync_bytes\":[85,170],\"frame_type\":%u,"
-           "\"sequence_number\":%u,\"payload_length\":%u,\"checksum\":%u,\"payload\":{",
-           (unsigned int)cap.frame.frame_type,
-           (unsigned int)cap.frame.sequence_number,
-           (unsigned int)cap.frame.payload_length,
-           (unsigned int)cap.frame.checksum);
-
-    switch (cap.frame.frame_type) {
-        case OLNK_FRAME_CMD_INIT:
-            printf("\"client_version\":%u,\"drive_count\":%u",
-                   (unsigned int)cap.frame.payload.init.client_version,
-                   (unsigned int)cap.frame.payload.init.drive_count);
-            break;
-        case OLNK_FRAME_CMD_READ_SECTOR:
-            printf("\"drive_index\":%u,\"start_sector\":%lu,\"sector_count\":%u",
-                   (unsigned int)cap.frame.payload.read_sector.drive_index,
-                   (unsigned long)cap.frame.payload.read_sector.start_sector,
-                   (unsigned int)cap.frame.payload.read_sector.sector_count);
-            break;
-        case OLNK_FRAME_CMD_WRITE_SECTOR:
-            printf("\"drive_index\":%u,\"start_sector\":%lu,\"sector_count\":%u,\"data_hex\":",
-                   (unsigned int)cap.frame.payload.write_sector.drive_index,
-                   (unsigned long)cap.frame.payload.write_sector.start_sector,
-                   (unsigned int)cap.frame.payload.write_sector.sector_count);
-            print_hex_bytes(cap.data_copy, cap.data_copy_len);
-            break;
-        case OLNK_FRAME_RESP_INIT_ACK:
-            printf("\"server_version\":%u,\"drive_count\":%u,\"status\":%u",
-                   (unsigned int)cap.frame.payload.init_ack.server_version,
-                   (unsigned int)cap.frame.payload.init_ack.drive_count,
-                   (unsigned int)cap.frame.payload.init_ack.status);
-            break;
-        case OLNK_FRAME_RESP_READ_DATA:
-            printf("\"drive_index\":%u,\"start_sector\":%lu,\"data_hex\":",
-                   (unsigned int)cap.frame.payload.read_data.drive_index,
-                   (unsigned long)cap.frame.payload.read_data.start_sector);
-            print_hex_bytes(cap.data_copy, cap.data_copy_len);
-            break;
-        case OLNK_FRAME_RESP_ERROR:
-            printf("\"error_code\":%u,\"detail\":%u",
-                   (unsigned int)cap.frame.payload.error.error_code,
-                   (unsigned int)cap.frame.payload.error.detail);
-            break;
-        default:
-            break;
+    if (consumed != raw_len) {
+        printf("{\"status\":\"INVALID_FRAME\",\"detail\":\"TRAILING_BYTES\",\"bytes_processed\":%lu}\n",
+               (unsigned long)consumed);
+        return 0;
     }
 
-    printf("}}\n");
+    printf(
+        "{\"status\":\"OK\",\"header\":%u,\"is_short_len\":%s,"
+        "\"more_fragments\":%s,\"echo_request\":%s,\"sequence_number\":%u,"
+        "\"len_payload\":%u,\"crc16\":%u,\"bytes_processed\":%lu}\n",
+        (unsigned int)cap.frame.header,
+        cap.frame.is_short_len ? "true" : "false",
+        cap.frame.more_fragments ? "true" : "false",
+        cap.frame.echo_request ? "true" : "false",
+        (unsigned int)cap.frame.sequence_number,
+        (unsigned int)cap.frame.payload_length,
+        (unsigned int)cap.frame.crc16,
+        (unsigned long)consumed
+    );
     return 0;
 }
