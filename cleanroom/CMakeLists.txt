@@ -15,7 +15,8 @@ add_library(openlnk_static STATIC
     src/protocol.c
     src/storage_mem.c
 )
-add_library(openlnk ALIAS openlnk_static)
+set_target_properties(openlnk_static PROPERTIES OUTPUT_NAME openlnk)
+add_library(openlnk::openlnk ALIAS openlnk_static)
 
 target_include_directories(openlnk_static PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
