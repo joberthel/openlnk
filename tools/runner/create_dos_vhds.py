@@ -229,6 +229,59 @@ def extract_fat12_floppy(
     return unpacked, kwaj_staged
 
 
+BOOT_FLOPPY_CONFIG_SYS = (
+    "FILES=20\r\n"
+    "BUFFERS=10\r\n"
+    "LASTDRIVE=Z\r\n"
+)
+
+BOOT_FLOPPY_AUTOEXEC_BAT = (
+    "@ECHO OFF\r\n"
+    "PROMPT $P$G\r\n"
+    "ECHO OpenLNK MS-DOS 6.22 XT Setup Floppy (no HIMEM/CDROM).\r\n"
+    "ECHO Run: FDISK /MBR  then  SYS C:  then  C:\\FINSETUP.BAT\r\n"
+)
+
+
+def sanitize_boot_floppy_for_xt(floppy_path: Path) -> None:
+    """Replace 386+/CD-ROM CONFIG.SYS (HIMEM/CD1.SYS BANANA) with XT-safe files."""
+    if sys.platform != "darwin":
+        return
+    with tempfile.TemporaryDirectory(prefix="openlnk_fdd_") as tmp_str:
+        mnt_dir = Path(tmp_str) / "mnt"
+        mnt_dir.mkdir()
+        attach_out = _run(
+            [
+                "hdiutil",
+                "attach",
+                "-imagekey",
+                "diskimage-class=CRawDiskImage",
+                "-nomount",
+                str(floppy_path),
+            ]
+        )
+        dev = attach_out.splitlines()[0].split()[0]
+        mounted = False
+        try:
+            _run(["mount", "-t", "msdos", "-o", "nobrowse", dev, str(mnt_dir)])
+            mounted = True
+            (mnt_dir / "CONFIG.SYS").write_bytes(BOOT_FLOPPY_CONFIG_SYS.encode("ascii"))
+            (mnt_dir / "AUTOEXEC.BAT").write_bytes(BOOT_FLOPPY_AUTOEXEC_BAT.encode("ascii"))
+            for junk in (".fseventsd", ".Spotlight-V100", ".Trashes"):
+                jp = mnt_dir / junk
+                if jp.is_dir():
+                    shutil.rmtree(jp, ignore_errors=True)
+                elif jp.is_file():
+                    jp.unlink(missing_ok=True)
+            _unmount_with_retry(mnt_dir)
+            mounted = False
+            _run(["/sbin/fsck_msdos", "-n", dev])
+        finally:
+            if mounted:
+                subprocess.run(["/usr/sbin/diskutil", "unmount", "force", str(mnt_dir)], check=False, capture_output=True)
+            subprocess.run(["hdiutil", "detach", "-force", dev], check=False, capture_output=True)
+
+
 def extract_eltorito_floppy(iso_path: Path, out_floppy: Path) -> Optional[Path]:
     data = iso_path.read_bytes()
     for sec in range(16, 32):
@@ -248,6 +301,7 @@ def extract_eltorito_floppy(iso_path: Path, out_floppy: Path) -> Optional[Path]:
                 if len(floppy) == sizes[media_type] and floppy[510:512] == b"\x55\xaa":
                     out_floppy.parent.mkdir(parents=True, exist_ok=True)
                     out_floppy.write_bytes(floppy)
+                    sanitize_boot_floppy_for_xt(out_floppy)
                     return out_floppy
         elif vd[0] == 255:
             break
