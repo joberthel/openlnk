@@ -229,6 +229,53 @@ def run_serial_mode(
         srv_ser.close()
 
 
+def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
+    """Create POSIX .in and .out FIFOs for 86Box Named Pipe (COM) Client mode.
+
+    In 86Box Client mode (mode=1), 86Box writes to <prefix>.in and reads from <prefix>.out.
+    Therefore the MITM proxy reads from .in and writes to .out, opening both with
+    O_RDWR | O_NONBLOCK so neither end ever deadlocks on open or disconnect.
+    """
+    in_path = Path(f"{prefix}.in")
+    out_path = Path(f"{prefix}.out")
+    for p in (in_path, out_path):
+        if p.exists():
+            p.unlink()
+        os.mkfifo(p, 0o600)
+    read_fd = os.open(str(in_path), os.O_RDWR | os.O_NONBLOCK)
+    write_fd = os.open(str(out_path), os.O_RDWR | os.O_NONBLOCK)
+    return in_path, out_path, read_fd, write_fd
+
+
+def relay_pipe_quad(
+    client_read_fd: int,
+    client_write_fd: int,
+    server_read_fd: int,
+    server_write_fd: int,
+    sink: CaptureSink,
+    stop_event: threading.Event,
+    poll_timeout: float = 0.05,
+) -> None:
+    """Bidirectional non-blocking select() relay over two separate in/out FIFO pairs."""
+    read_fds = [client_read_fd, server_read_fd]
+    while not stop_event.is_set():
+        readable, _, _ = select.select(read_fds, [], [], poll_timeout)
+        for fd in readable:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                continue
+            if not data:
+                continue
+            ts_ns = time.time_ns()
+            if fd == client_read_fd:
+                os.write(server_write_fd, data)
+                sink.record(ts_ns, "CLIENT", "SERVER", data)
+            else:
+                os.write(client_write_fd, data)
+                sink.record(ts_ns, "SERVER", "CLIENT", data)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Bidirectional Serial MITM Sniffer for MS-DOS INTERLNK/INTERSVR"
@@ -239,6 +286,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--create-ptys",
         action="store_true",
         help="Automatically allocate two POSIX virtual PTYs for Client & Server VMs",
+    )
+    parser.add_argument(
+        "--create-pipes",
+        action="store_true",
+        help="Create POSIX .in/.out FIFO pairs for 86Box Named Pipe (COM) mode (asserts virtual DSR/CTS)",
+    )
+    parser.add_argument(
+        "--pipe-dir",
+        type=Path,
+        default=Path("/tmp"),
+        help="Directory for --create-pipes FIFOs (default: /tmp)",
     )
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
     parser.add_argument(
@@ -259,8 +317,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    if not args.create_ptys and (not args.client_port or not args.server_port):
-        parser.error("Specify either --create-ptys OR both --client-port and --server-port.")
+    if not args.create_ptys and not args.create_pipes and (not args.client_port or not args.server_port):
+        parser.error("Specify --create-ptys, --create-pipes, OR both --client-port and --server-port.")
 
     stop_event = threading.Event()
 
@@ -272,7 +330,26 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     sink = CaptureSink(args.out_dir, args.session_name)
     try:
-        if args.create_ptys:
+        if args.create_pipes:
+            args.pipe_dir.mkdir(parents=True, exist_ok=True)
+            c_prefix = args.pipe_dir / "openlnk_cli"
+            s_prefix = args.pipe_dir / "openlnk_srv"
+            c_in, c_out, c_rfd, c_wfd = create_fifo_pair(c_prefix)
+            s_in, s_out, s_rfd, s_wfd = create_fifo_pair(s_prefix)
+            print(f"[serial_mitm] Client Pipe Prefix: {c_prefix} (.in/.out)", flush=True)
+            print(f"[serial_mitm] Server Pipe Prefix: {s_prefix} (.in/.out)", flush=True)
+            print(f"[serial_mitm] Logging to: {sink.hexlog_path} / {sink.pcap_path}", flush=True)
+            try:
+                relay_pipe_quad(c_rfd, c_wfd, s_rfd, s_wfd, sink, stop_event)
+            finally:
+                for fd in (c_rfd, c_wfd, s_rfd, s_wfd):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                for p in (c_in, c_out, s_in, s_out):
+                    p.unlink(missing_ok=True)
+        elif args.create_ptys:
             c_master, c_slave, c_path = create_pty_pair()
             s_master, s_slave, s_path = create_pty_pair()
             print(f"[serial_mitm] Client PTY: {c_path}", flush=True)

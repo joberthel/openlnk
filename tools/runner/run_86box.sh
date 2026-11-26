@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MODE="client"
 BAUD="115200"
+SERIAL_TRANSPORT="pty"
 SERIAL_CLIENT=""
 SERIAL_SERVER=""
 WORKDIR="${REPO_ROOT}/build/86box_run"
@@ -30,8 +31,9 @@ integration testing.
 Options:
   --mode <client|server|dual|oracle>  Execution topology (default: client)
   --baud <rate>                       Target COM1 baud rate (default: 115200)
-  --serial-client <device>            Optional host serial/PTY path for Client COM1 passthrough
-  --serial-server <device>            Optional host serial/PTY path for Server COM1 passthrough
+  --transport <pty|pipe>              COM1 backend: serial_passthrough (pty) or Named Pipe (pipe)
+  --serial-client <device|prefix>     Host PTY path or Named Pipe prefix for Client COM1
+  --serial-server <device|prefix>     Host PTY path or Named Pipe prefix for Server COM1
   --client-vhd <path>                 MS-DOS 6.22 Client VHD image path
   --server-vhd <path>                 MS-DOS 6.22 Server VHD image path
   --client-floppy <path>              Optional 1.44M floppy image for Client VM (A:)
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode) MODE="$2"; shift 2 ;;
         --baud) BAUD="$2"; shift 2 ;;
+        --transport) SERIAL_TRANSPORT="$2"; shift 2 ;;
         --serial-client) SERIAL_CLIENT="$2"; shift 2 ;;
         --serial-server) SERIAL_SERVER="$2"; shift 2 ;;
         --client-vhd) CLIENT_VHD="$2"; shift 2 ;;
@@ -106,16 +109,32 @@ EOF
     fi
 
     if [[ -n "$serial_dev" ]]; then
-        # Enable serial1 passthrough in [Ports (COM & LPT)] using 86Box v4/v5 keys
-        awk '
-            /^serial1_enabled = 1$/ {
-                print "serial1_device = serial_passthrough"
-                next
-            }
-            { print }
-        ' "$output_cfg" > "${output_cfg}.tmp" && mv "${output_cfg}.tmp" "$output_cfg"
+        if [[ "$SERIAL_TRANSPORT" == "pipe" ]]; then
+            awk '
+                /^serial1_enabled = 1$/ {
+                    print "serial1_device = pipe"
+                    next
+                }
+                { print }
+            ' "$output_cfg" > "${output_cfg}.tmp" && mv "${output_cfg}.tmp" "$output_cfg"
 
-        cat >> "$output_cfg" <<EOF
+            cat >> "$output_cfg" <<EOF
+
+[Named Pipe (COM) #1]
+path = ${serial_dev}
+mode = 1
+reconnect = 1
+EOF
+        else
+            awk '
+                /^serial1_enabled = 1$/ {
+                    print "serial1_device = serial_passthrough"
+                    next
+                }
+                { print }
+            ' "$output_cfg" > "${output_cfg}.tmp" && mv "${output_cfg}.tmp" "$output_cfg"
+
+            cat >> "$output_cfg" <<EOF
 
 [Serial Passthrough (COM) #1]
 mode = 3
@@ -125,6 +144,7 @@ data_bits = 8
 stop_bits = 1
 parity = 0
 EOF
+        fi
     fi
 }
 

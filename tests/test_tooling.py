@@ -123,6 +123,47 @@ class TestSerialMitm(unittest.TestCase):
             self.assertEqual(sink.bytes_c2s, len(b"HELLO_SRV"))
             self.assertEqual(sink.bytes_s2c, len(b"ACK_CLI"))
 
+    @unittest.skipIf(os.name != "posix", "POSIX FIFO test")
+    def test_live_posix_fifo_pipe_relay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            sink = serial_mitm.CaptureSink(tdir, "fifo_relay")
+            c_in, c_out, c_rfd, c_wfd = serial_mitm.create_fifo_pair(tdir / "cli")
+            s_in, s_out, s_rfd, s_wfd = serial_mitm.create_fifo_pair(tdir / "srv")
+            stop_event = threading.Event()
+            t = threading.Thread(
+                target=serial_mitm.relay_pipe_quad,
+                args=(c_rfd, c_wfd, s_rfd, s_wfd, sink, stop_event, 0.01),
+                daemon=True,
+            )
+            t.start()
+            try:
+                # 86Box Client mode writes to .in and reads from .out
+                cli_tx = os.open(str(c_in), os.O_WRONLY | os.O_NONBLOCK)
+                srv_rx = os.open(str(s_out), os.O_RDONLY | os.O_NONBLOCK)
+                srv_tx = os.open(str(s_in), os.O_WRONLY | os.O_NONBLOCK)
+                cli_rx = os.open(str(c_out), os.O_RDONLY | os.O_NONBLOCK)
+                try:
+                    os.write(cli_tx, b"\x03RCOPY")
+                    time.sleep(0.05)
+                    self.assertEqual(os.read(srv_rx, 64), b"\x03RCOPY")
+
+                    os.write(srv_tx, b"C:\\>")
+                    time.sleep(0.05)
+                    self.assertEqual(os.read(cli_rx, 64), b"C:\\>")
+                finally:
+                    for fd in (cli_tx, srv_rx, srv_tx, cli_rx):
+                        os.close(fd)
+            finally:
+                stop_event.set()
+                t.join(timeout=1.0)
+                sink.close()
+                for fd in (c_rfd, c_wfd, s_rfd, s_wfd):
+                    os.close(fd)
+
+            self.assertEqual(sink.bytes_c2s, len(b"\x03RCOPY"))
+            self.assertEqual(sink.bytes_s2c, len(b"C:\\>"))
+
 
 class TestCleanroomIsolation(unittest.TestCase):
     def test_repo_passes_cleanroom_isolation(self) -> None:
