@@ -247,6 +247,16 @@ def create_fifo_pair(prefix: Path) -> tuple[Path, Path, int, int]:
     return in_path, out_path, read_fd, write_fd
 
 
+def _write_paced(fd: int, data: bytes, pace_us: int) -> None:
+    if pace_us <= 0 or len(data) == 0:
+        os.write(fd, data)
+        return
+    delay_s = pace_us / 1_000_000.0
+    for idx in range(len(data)):
+        os.write(fd, data[idx : idx + 1])
+        time.sleep(delay_s)
+
+
 def relay_pipe_quad(
     client_read_fd: int,
     client_write_fd: int,
@@ -255,6 +265,7 @@ def relay_pipe_quad(
     sink: CaptureSink,
     stop_event: threading.Event,
     poll_timeout: float = 0.05,
+    pace_us: int = 0,
 ) -> None:
     """Bidirectional non-blocking select() relay over two separate in/out FIFO pairs."""
     read_fds = [client_read_fd, server_read_fd]
@@ -269,10 +280,10 @@ def relay_pipe_quad(
                 continue
             ts_ns = time.time_ns()
             if fd == client_read_fd:
-                os.write(server_write_fd, data)
+                _write_paced(server_write_fd, data, pace_us)
                 sink.record(ts_ns, "CLIENT", "SERVER", data)
             else:
-                os.write(client_write_fd, data)
+                _write_paced(client_write_fd, data, pace_us)
                 sink.record(ts_ns, "SERVER", "CLIENT", data)
 
 
@@ -299,6 +310,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Directory for --create-pipes FIFOs (default: /tmp)",
     )
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
+    parser.add_argument(
+        "--pace-us",
+        type=int,
+        default=0,
+        help="Optional per-byte pacing delay in microseconds for --create-pipes (prevents 8250 UART RX overrun)",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -340,7 +357,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"[serial_mitm] Server Pipe Prefix: {s_prefix} (.in/.out)", flush=True)
             print(f"[serial_mitm] Logging to: {sink.hexlog_path} / {sink.pcap_path}", flush=True)
             try:
-                relay_pipe_quad(c_rfd, c_wfd, s_rfd, s_wfd, sink, stop_event)
+                relay_pipe_quad(
+                    c_rfd, c_wfd, s_rfd, s_wfd, sink, stop_event, pace_us=args.pace_us
+                )
             finally:
                 for fd in (c_rfd, c_wfd, s_rfd, s_wfd):
                     try:
