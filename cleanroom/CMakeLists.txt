@@ -80,4 +80,21 @@ if(OPENLNK_BUILD_TESTS)
         target_compile_options(test_dos_hal PRIVATE -Wall -Wextra -Werror -pedantic)
     endif()
     add_test(NAME libopenlnk_dos_hal_16bit COMMAND test_dos_hal)
+
+    add_executable(test_esp32_hal
+        tests/test_esp32_hal.c
+        ../esp32/src/esp32_hal_uart.c
+        ../esp32/src/esp32_hal_sd.c
+        ../esp32/src/esp32_hal_img.c
+        ../esp32/src/esp32_server.c
+    )
+    target_include_directories(test_esp32_hal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../esp32/include)
+    target_link_libraries(test_esp32_hal PRIVATE openlnk_static)
+    if(MSVC)
+        target_compile_options(test_esp32_hal PRIVATE /W4 /WX)
+        target_compile_definitions(test_esp32_hal PRIVATE _CRT_SECURE_NO_WARNINGS)
+    else()
+        target_compile_options(test_esp32_hal PRIVATE -Wall -Wextra -Werror -pedantic)
+    endif()
+    add_test(NAME libopenlnk_esp32_hal COMMAND test_esp32_hal)
 endif()

@@ -42,6 +42,11 @@ build/
 dist/
 cleanroom/build/
 cleanroom/dos/build/
+esp32/**/build/
+sdkconfig
+sdkconfig.old
+managed_components/
+.pio/
 *.o
 *.obj
 *.a
@@ -54,6 +59,7 @@ cleanroom/openlnk
 cleanroom/openlnk-vector-check
 cleanroom/test_libopenlnk
 cleanroom/test_dos_hal
+cleanroom/test_esp32_hal
 
 # Python artifacts
 __pycache__/

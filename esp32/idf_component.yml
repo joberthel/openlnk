@@ -1,7 +1,8 @@
 name: openlnk
 version: "0.2.0" # x-release-please-version
-description: "OpenLNK (libopenlnk): clean-room allocation-free C99 MS-DOS INTERLNK/INTERSVR protocol library for ESP-IDF 5.x"
-url: "https://github.com/openlnk/openlnk"
+description: "OpenLNK (libopenlnk): clean-room allocation-free C99 MS-DOS INTERLNK/INTERSVR UART + SD/VHD block server library for ESP-IDF 5.x"
+url: "https://github.com/joberthel/openlnk"
+repository: "https://github.com/joberthel/openlnk.git"
 license: "MIT"
 dependencies:
   idf: ">=5.0"

@@ -43,6 +43,7 @@ jobs:
           python3 -m json.tool esp32/library.json > /dev/null
           python3 -m json.tool release-please-config.json > /dev/null
           python3 -m json.tool .release-please-manifest.json > /dev/null
+          python3 -m py_compile esp32/pio_build.py esp32/tools/make_arduino_bundle.py
 
   c99-native-build:
     name: C99 Native (${{ matrix.os }} / ${{ matrix.compiler }})
@@ -188,3 +189,49 @@ jobs:
 
       - name: Run Python tooling unit test suite
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
+
+  esp32-idf-build:
+    name: ESP32 Embedded (ESP-IDF 5.x — esp32 & esp32c3)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.3.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cross-compile sd_server_idf for esp32 (SDMMC + Raw SD)
+        run: |
+          source /opt/esp/idf/export.sh
+          cd esp32/examples/sd_server_idf
+          idf.py -B build_esp32 -DSDKCONFIG=build_esp32/sdkconfig set-target esp32
+          idf.py -B build_esp32 -DSDKCONFIG=build_esp32/sdkconfig build 2>&1 | tee build_esp32/build.log
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32/build.log
+          idf.py -B build_esp32 -DSDKCONFIG=build_esp32/sdkconfig size
+
+      - name: Cross-compile sd_server_idf for esp32c3 (SDSPI-only, !SOC_SDMMC_HOST_SUPPORTED)
+        run: |
+          source /opt/esp/idf/export.sh
+          cd esp32/examples/sd_server_idf
+          idf.py -B build_esp32c3 -DSDKCONFIG=build_esp32c3/sdkconfig set-target esp32c3
+          idf.py -B build_esp32c3 -DSDKCONFIG=build_esp32c3/sdkconfig build 2>&1 | tee build_esp32c3/build.log
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32c3/build.log
+          idf.py -B build_esp32c3 -DSDKCONFIG=build_esp32c3/sdkconfig size
+
+      - name: Cross-compile sd_server_idf for esp32 (VFS .img/.vhd mode)
+        run: |
+          source /opt/esp/idf/export.sh
+          cd esp32/examples/sd_server_idf
+          printf 'CONFIG_OPENLNK_STORAGE_MODE_IMG=y\n' > sdkconfig.ci_img
+          idf.py -B build_esp32_img -DSDKCONFIG=build_esp32_img/sdkconfig -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img set-target esp32
+          idf.py -B build_esp32_img -DSDKCONFIG=build_esp32_img/sdkconfig -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img build 2>&1 | tee build_esp32_img/build.log
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32_img/build.log
+          rm -f sdkconfig.ci_img
+
+      - name: Upload ESP32 firmware binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlnk-esp32-idf-firmware
+          path: |
+            esp32/examples/sd_server_idf/build_esp32/openlnk_sd_server.bin
+            esp32/examples/sd_server_idf/build_esp32/openlnk_sd_server.elf
+            esp32/examples/sd_server_idf/build_esp32c3/openlnk_sd_server.bin
+            esp32/examples/sd_server_idf/build_esp32c3/openlnk_sd_server.elf

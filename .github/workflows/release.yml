@@ -288,9 +288,80 @@ jobs:
           path: dist/openlnk-*
           if-no-files-found: error
 
+  build-esp32-lib:
+    name: Package ESP32 Library (Arduino IDE & PlatformIO)
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & verify standalone ESP32 Arduino/PlatformIO library ZIP
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          BUNDLE_ZIP="dist/openlnk-${TAG_NAME}-arduino-esp32.zip"
+          python3 esp32/tools/make_arduino_bundle.py --out "$BUNDLE_ZIP"
+          ls -lh "$BUNDLE_ZIP"
+
+          TMP_VERIFY="$(mktemp -d)"
+          trap 'rm -rf "$TMP_VERIFY"' EXIT
+          python3 - "$BUNDLE_ZIP" "$TMP_VERIFY" "$RELEASE_VERSION" <<'PY'
+          import json
+          import re
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          zip_path = Path(sys.argv[1])
+          out_dir = Path(sys.argv[2])
+          expected_ver = sys.argv[3]
+
+          with zipfile.ZipFile(zip_path, "r") as zf:
+              zf.extractall(out_dir)
+
+          root = out_dir / "openlnk"
+          props = (root / "library.properties").read_text(encoding="utf-8")
+          assert re.search(rf"^version={re.escape(expected_ver)}$", props, re.M), \
+              f"library.properties version mismatch (expected {expected_ver})"
+
+          lib_json = json.loads((root / "library.json").read_text(encoding="utf-8"))
+          assert lib_json["version"] == expected_ver, \
+              f"library.json version mismatch: {lib_json['version']} != {expected_ver}"
+          assert lib_json["build"]["includeDir"] == "src"
+          assert (root / "pio_build.py").is_file()
+          assert (root / "examples" / "sd_server_arduino" / "sd_server_arduino.ino").is_file()
+
+          ver_h = (root / "src" / "openlnk" / "version.h").read_text(encoding="utf-8")
+          assert f'#define OLNK_VERSION_STRING "{expected_ver}"' in ver_h
+
+          print(f"Verified standalone ESP32 library bundle v{expected_ver}")
+          PY
+
+          gcc -std=c99 -Wall -Wextra -Werror -pedantic -Wconversion -Wshadow -Wstrict-prototypes \
+            -I"${TMP_VERIFY}/openlnk/src" -fsyntax-only \
+            "${TMP_VERIFY}/openlnk/src/"*.c "${TMP_VERIFY}/openlnk/src/openlnk_core/"*.c
+          echo "Verified standalone bundle strict-C99 compile (0 warnings)"
+
+      - name: Upload ESP32 library release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-esp32-lib
+          path: dist/openlnk-*-arduino-esp32.zip
+          if-no-files-found: error
+
   publish-release:
     name: Checksums, Attestation & Publish
-    needs: [release-please, build-dos16, build-desktop]
+    needs: [release-please, build-dos16, build-desktop, build-esp32-lib]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     permissions:

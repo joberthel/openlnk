@@ -275,6 +275,37 @@ class TestReleaseMetadataAndDosVerifier(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 verify_dos_binaries.verify_dos_binaries(bdir)
 
+    def test_esp32_arduino_platformio_bundle_builder(self) -> None:
+        import zipfile
+        from esp32.tools import make_arduino_bundle
+
+        manifest = json.loads((REPO_ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
+        version = manifest["."]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_out = Path(tmp) / f"openlnk-v{version}-arduino-esp32.zip"
+            make_arduino_bundle.build_bundle(REPO_ROOT, zip_out)
+            self.assertTrue(zip_out.is_file())
+
+            with zipfile.ZipFile(zip_out, "r") as zf:
+                names = set(zf.namelist())
+                self.assertIn("openlnk/library.properties", names)
+                self.assertIn("openlnk/library.json", names)
+                self.assertIn("openlnk/pio_build.py", names)
+                self.assertIn("openlnk/src/openlnk_esp32.h", names)
+                self.assertIn("openlnk/src/esp32_hal_uart.c", names)
+                self.assertIn("openlnk/src/openlnk/version.h", names)
+                self.assertIn("openlnk/src/openlnk_core/server.c", names)
+                self.assertIn("openlnk/examples/sd_server_arduino/sd_server_arduino.ino", names)
+
+                lib_json = json.loads(zf.read("openlnk/library.json").decode("utf-8"))
+                self.assertEqual(lib_json["version"], version)
+                self.assertEqual(lib_json["build"]["includeDir"], "src")
+                self.assertEqual(lib_json["build"]["srcDir"], "src")
+                self.assertIn("+<openlnk_core/*.c>", lib_json["build"]["srcFilter"])
+                props = zf.read("openlnk/library.properties").decode("utf-8")
+                self.assertRegex(props, re.compile(rf"^version={re.escape(version)}$", re.M))
+
 
 if __name__ == "__main__":
     unittest.main()

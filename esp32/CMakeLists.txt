@@ -7,10 +7,14 @@ idf_component_register(
         "../cleanroom/src/server.c"
         "../cleanroom/src/client.c"
         "src/esp32_hal_uart.c"
+        "src/esp32_hal_sd.c"
+        "src/esp32_hal_img.c"
+        "src/esp32_server.c"
     INCLUDE_DIRS
         "../cleanroom/include"
         "include"
     REQUIRES
         driver
         sdmmc
+        esp_timer
 )

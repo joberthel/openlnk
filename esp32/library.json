@@ -9,9 +9,17 @@
     "intersvr",
     "serial",
     "rs232",
+    "max3232",
+    "sdmmc",
+    "sdspi",
     "retrocomputing",
     "fat16"
   ],
+  "homepage": "https://github.com/joberthel/openlnk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joberthel/openlnk.git"
+  },
   "license": "MIT",
   "frameworks": [
     "espidf",
@@ -20,13 +28,12 @@
   "platforms": [
     "espressif32"
   ],
+  "headers": [
+    "openlnk_esp32.h"
+  ],
   "build": {
-    "flags": [
-      "-std=c99",
-      "-I../cleanroom/include",
-      "-Iinclude"
-    ],
     "srcDir": "src",
-    "includeDir": "include"
+    "includeDir": "include",
+    "extraScript": "pio_build.py"
   }
 }
