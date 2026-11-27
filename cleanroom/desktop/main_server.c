@@ -857,6 +857,9 @@ static bool posix_serial_configure(int fd, uint32_t bps) {
     tio.c_oflag &= (tcflag_t)~(OPOST);
     tio.c_lflag &= (tcflag_t)~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     tio.c_cflag &= (tcflag_t)~(CSIZE | PARENB | CSTOPB);
+#ifdef CRTSCTS
+    tio.c_cflag &= (tcflag_t)~CRTSCTS;
+#endif
     tio.c_cflag |= (tcflag_t)(CS8 | CLOCAL | CREAD);
     tio.c_cc[VMIN] = 0U;
     tio.c_cc[VTIME] = 0U;
@@ -1120,6 +1123,8 @@ static int run_posix_server(
         }
         if (n > 0) {
             olnk_server_feed_bytes(&srv, buf, (size_t)n);
+            /* Do not charge disk/V-FAT/serial TX processing time to the next silence tick */
+            last_ms = monotonic_ms();
         } else if (dt_ms > 0UL) {
             olnk_server_tick(&srv, dt_ms);
         }

@@ -913,6 +913,65 @@ static void test_high_level_client_rpc_engine(void) {
     EXPECT_TRUE(cli.link.session_resumed);
 }
 
+static int dummy_null_write(const uint8_t *buf, size_t len, uint32_t timeout_ms, void *ud) {
+    (void)buf;
+    (void)timeout_ms;
+    (void)ud;
+    return (int)len;
+}
+
+static void test_serial_burst_wire_timeout_and_resync_recovery(void) {
+    static olnk_server_t srv;
+    olnk_transport_t tr;
+    olnk_storage_ops_t st_ops;
+    uint8_t aa = OLNK_SYNC_C1;
+    uint8_t sync_seq[3] = { OLNK_SYNC_C1, OLNK_SYNC_C2, OLNK_SYNC_C3 };
+
+    memset(&tr, 0, sizeof(tr));
+    memset(&st_ops, 0, sizeof(st_ops));
+    tr.write = dummy_null_write;
+    EXPECT_EQ_U32(olnk_server_init(&srv, tr, st_ops), OLNK_OK);
+
+    /* 1. Burst TX wire-time margin at 9600 bps: 8192 B frame takes ~8.5s on wire */
+    srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_9600;
+    srv.srv_state = (uint8_t)OLNK_SRV_TX_WAIT_FINAL_ACK;
+    srv.tx_echo_mode = false;
+    srv.tx_stream_total = 8196U;
+    srv.tx_payload_ptr = srv.tx_ctrl_buf;
+    srv.tx_payload_len = 8192U;
+    srv.tx_retries = 0U;
+    srv.state_elapsed_ms = 0UL;
+
+    /* Must NOT time out at 600 ms (or 8000 ms) while UART is still clocking out bytes */
+    olnk_server_tick(&srv, 600UL);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_TX_WAIT_FINAL_ACK);
+    EXPECT_EQ_U32(srv.link.frames_tx_retry, 0UL);
+    olnk_server_tick(&srv, 7400UL);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_TX_WAIT_FINAL_ACK);
+    EXPECT_EQ_U32(srv.link.frames_tx_retry, 0UL);
+
+    /* Must still time out & retry once wire serialization + tx_timeout_ms elapses */
+    olnk_server_tick(&srv, 3500UL);
+    EXPECT_EQ_U32(srv.link.frames_tx_retry, 1UL);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_TX_WAIT_HDR_ACK);
+
+    /* 2. Aborted multi-frame WRITE_DATA at 9600 bps recovers immediately on 0xAA sync */
+    olnk_server_drop_link(&srv);
+    olnk_server_feed_bytes(&srv, sync_seq, 3U);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_IDLE_RX);
+    srv.req_phase = (uint8_t)OLNK_REQ_PHASE_WRITE_DATA;
+    olnk_server_feed_bytes(&srv, &aa, 1U);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_55);
+    EXPECT_EQ_U32(srv.req_phase, (uint32_t)OLNK_REQ_PHASE_CMD);
+
+    /* 3. Periodic 0xAA sync probe (>=100 ms gap) breaks out of RX_ERROR_DRAIN at 9600 bps */
+    srv.srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+    srv.state_elapsed_ms = 0UL;
+    olnk_server_tick(&srv, 150UL);
+    olnk_server_feed_bytes(&srv, &aa, 1U);
+    EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_55);
+}
+
 int main(void) {
     test_crc16_genibus_and_residue();
     test_protocol_tokens_and_wire_framing();
@@ -922,6 +981,7 @@ int main(void) {
     test_end_to_end_rpc_and_session_resumption();
     test_storage_helpers();
     test_high_level_client_rpc_engine();
+    test_serial_burst_wire_timeout_and_resync_recovery();
 
     if (g_failures == 0) {
         printf("All libopenlnk C99 MS-DOS 6.22 protocol tests PASSED.\n");

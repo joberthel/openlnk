@@ -115,6 +115,15 @@ static void srv_start_tx_frame(
     srv_write_byte(srv, srv->tx_hdr);
 }
 
+static uint32_t srv_burst_wire_ms(const olnk_server_t *srv) {
+    uint32_t bps = olnk_baud_index_to_bps(srv->link.current_baud_idx);
+    if (bps == 0UL) {
+        bps = 9600UL;
+    }
+    /* 12 bits/byte safety margin (10 wire bits + USB-serial / FIFO jitter) */
+    return ((uint32_t)srv->tx_stream_total * 12000UL) / bps;
+}
+
 static void srv_retry_tx_frame(olnk_server_t *srv) {
     srv->link.frames_tx_retry += 1U;
     if (!srv->tx_echo_mode) {
@@ -1113,9 +1122,12 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
                 break;
             }
             if ((b == OLNK_SYNC_C1) &&
-                (srv->link.current_baud_idx == (uint8_t)OLNK_BAUD_9600) &&
-                (srv->req_phase == (uint8_t)OLNK_REQ_PHASE_CMD)) {
+                (srv->link.current_baud_idx == (uint8_t)OLNK_BAUD_9600)) {
+                /* 0xAA has reserved header bits set (0x28), so at 9600 bps it is
+                 * unambiguously a Phase-A client sync probe even after an aborted RPC. */
                 srv_write_byte(srv, OLNK_SYNC_S1);
+                srv->req_phase = (uint8_t)OLNK_REQ_PHASE_CMD;
+                srv->resp_phase = (uint8_t)OLNK_RESP_NONE;
                 srv->srv_state = (uint8_t)OLNK_SRV_SYNC_WAIT_55;
                 srv->state_elapsed_ms = 0UL;
                 break;
@@ -1263,6 +1275,17 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
             break;
 
         case OLNK_SRV_RX_ERROR_DRAIN:
+            if ((b == OLNK_SYNC_C1) &&
+                (srv->link.current_baud_idx == (uint8_t)OLNK_BAUD_9600) &&
+                (srv->state_elapsed_ms >= 100UL)) {
+                /* Periodic Phase-A sync probe after >=100 ms gap: recover immediately */
+                srv_write_byte(srv, OLNK_SYNC_S1);
+                srv->req_phase = (uint8_t)OLNK_REQ_PHASE_CMD;
+                srv->resp_phase = (uint8_t)OLNK_RESP_NONE;
+                srv->srv_state = (uint8_t)OLNK_SRV_SYNC_WAIT_55;
+                srv->state_elapsed_ms = 0UL;
+                break;
+            }
             srv->state_elapsed_ms = 0UL;
             break;
 
@@ -1407,6 +1430,12 @@ void olnk_server_tick(olnk_server_t *srv, uint32_t elapsed_ms) {
 
         case OLNK_SRV_IDLE_RX:
             srv->idle_elapsed_ms += elapsed_ms;
+            if ((srv->req_phase != (uint8_t)OLNK_REQ_PHASE_CMD) &&
+                (srv->state_elapsed_ms >= 2000UL)) {
+                /* Abandoned multi-frame RPC follow-on: reset back to command phase */
+                srv->req_phase = (uint8_t)OLNK_REQ_PHASE_CMD;
+                srv->state_elapsed_ms = 0UL;
+            }
             if ((srv->idle_disconnect_ms > 0UL) &&
                 (srv->link.current_baud_idx > (uint8_t)OLNK_BAUD_9600) &&
                 (srv->idle_elapsed_ms >= srv->idle_disconnect_ms)) {
@@ -1474,11 +1503,22 @@ void olnk_server_tick(olnk_server_t *srv, uint32_t elapsed_ms) {
 
         case OLNK_SRV_TX_WAIT_HDR_ACK:
         case OLNK_SRV_TX_ECHO_BYTE:
-        case OLNK_SRV_TX_WAIT_FINAL_ACK:
             if (srv->state_elapsed_ms >= srv->link.tx_timeout_ms) {
                 srv_retry_tx_frame(srv);
             }
             break;
+
+        case OLNK_SRV_TX_WAIT_FINAL_ACK: {
+            uint32_t wait_ms = srv->link.tx_timeout_ms;
+            if (!srv->tx_echo_mode) {
+                /* Account for physical RS-232 serialization time when OS buffers TX */
+                wait_ms += srv_burst_wire_ms(srv);
+            }
+            if (srv->state_elapsed_ms >= wait_ms) {
+                srv_retry_tx_frame(srv);
+            }
+            break;
+        }
 
         case OLNK_SRV_SYNC_WAIT_AA:
         default:

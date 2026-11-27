@@ -680,8 +680,19 @@ static olnk_status_t send_frame_once(
         }
     }
 
-    /* 3. Wait for final_ack == hdr */
-    st = hal_read_byte(ctx, &final_ack, ctx->tx_timeout_ms);
+    /* 3. Wait for final_ack == hdr (in Burst mode, allow wire TX serialization time) */
+    {
+        uint32_t ack_wait_ms = ctx->tx_timeout_ms;
+        if (!echo_mode) {
+            uint32_t bps = olnk_baud_index_to_bps(ctx->current_baud_idx);
+            uint32_t wire_bytes = (uint32_t)len_sz + (uint32_t)payload_len + 2UL;
+            if (bps == 0UL) {
+                bps = 9600UL;
+            }
+            ack_wait_ms += (wire_bytes * 12000UL) / bps;
+        }
+        st = hal_read_byte(ctx, &final_ack, ack_wait_ms);
+    }
     if (st != OLNK_OK) {
         return st;
     }
