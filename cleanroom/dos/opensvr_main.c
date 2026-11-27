@@ -1,62 +1,164 @@
 /* cleanroom/dos/opensvr_main.c
  *
- * 16-bit Real-Mode MS-DOS OPENSVR.EXE clean-room server entry target
- * compiled with Open Watcom v2 (-ms small memory model, 8086/8088 safe).
+ * Clean-room 16-bit Real-Mode MS-DOS OPENSVR.EXE server target.
+ * Uses direct 8250/16550A COM port I/O (dos_hal_uart.c) and MS-DOS INT 25h/26h
+ * logical sector I/O (dos_hal_disk.c) backed by libopenlnk's zero-alloc
+ * olnk_server_t state machine.
+ *
+ * Compiled via Open Watcom v2 (-ms -0 -za99 -wx -we -os -bt=dos) for 8086/8088.
  */
+#include "dos_hal_disk.h"
+#include "dos_hal_uart.h"
 #include "openlnk/server.h"
-#include "openlnk/storage.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
-static int dos_null_read(uint8_t *buf, size_t len, uint32_t timeout_ms, void *user_data) {
-    (void)buf;
-    (void)len;
-    (void)timeout_ms;
-    (void)user_data;
-    return 0;
+#if defined(__WATCOMC__) && defined(__DOS__)
+#include <conio.h>
+#endif
+
+/* Keep all large server/HAL contexts static (never on 16-bit Real-Mode stack) */
+static olnk_server_t g_dos_server;
+static olnk_dos_uart_t g_dos_uart;
+static olnk_dos_disk_set_t g_dos_disks;
+
+static uint32_t parse_u32_ascii(const char *s) {
+    uint32_t val = 0UL;
+    if (s == NULL) {
+        return 0UL;
+    }
+    while ((*s >= '0') && (*s <= '9')) {
+        val = (val * 10UL) + (uint32_t)(*s - '0');
+        ++s;
+    }
+    return val;
 }
 
-static int dos_null_write(const uint8_t *buf, size_t len, uint32_t timeout_ms, void *user_data) {
-    (void)buf;
-    (void)timeout_ms;
-    (void)user_data;
-    return (int)len;
-}
-
-static bool dos_null_set_baud(uint32_t baudrate, void *user_data) {
-    (void)baudrate;
-    (void)user_data;
+static bool str_ieq_prefix(const char *s, const char *prefix) {
+    while (*prefix != '\0') {
+        if (toupper((unsigned char)*s) != toupper((unsigned char)*prefix)) {
+            return false;
+        }
+        ++s;
+        ++prefix;
+    }
     return true;
 }
 
-/* Keep large server/drive buffers static (never on 16-bit Real-Mode stack) */
-static olnk_server_t g_dos_server;
-static uint8_t g_dos_ramdisk[OLNK_SECTOR_SIZE * 2U];
+static void on_dos_server_event(const char *name, uint32_t a1, uint32_t a2, void *ud) {
+    (void)ud;
+    if (strcmp(name, "SYNC_OK") == 0) {
+        printf("[OPENSVR] Connected at 9600 bps\n");
+    } else if (strcmp(name, "BAUD_SWITCH") == 0) {
+        printf("[OPENSVR] Negotiated %lu bps (idx %lu)\n", (unsigned long)a1, (unsigned long)a2);
+    } else if (strcmp(name, "SESSION_SYNC") == 0) {
+        printf("[OPENSVR] Session %s (client_id=0x%08lX)\n",
+               (a2 != 0UL) ? "resumed" : "started",
+               (unsigned long)a1);
+    } else if (strcmp(name, "DISCONNECT") == 0) {
+        printf("[OPENSVR] Link reset -> waiting at 9600 bps\n");
+    }
+}
 
-int main(void) {
+static void print_dos_usage(void) {
+    printf("OPENSVR 0.2.0 (libopenlnk 16-bit Real-Mode MS-DOS 6.22 server)\n");
+    printf("Usage: OPENSVR [drives...] [/COM1../COM4] [/BAUD:rate] [/RO] [/BURST]\n");
+    printf("Example: OPENSVR C: /COM1 /BAUD:115200\n");
+}
+
+int main(int argc, char **argv) {
+    uint8_t com_num = 1U;
+    uint32_t max_baud = 115200UL;
+    uint8_t max_baud_idx = (uint8_t)OLNK_BAUD_115200;
+    bool read_only = false;
+    bool echo_mode = true;
+    bool explicit_drives = false;
     olnk_transport_t tr;
-    olnk_mem_drive_t drv;
-    const uint8_t sync_probe[3] = { OLNK_SYNC_C1, OLNK_SYNC_C2, OLNK_SYNC_C3 };
+    int i;
 
-    tr.read = dos_null_read;
-    tr.write = dos_null_write;
-    tr.set_baud = dos_null_set_baud;
-    tr.user_data = NULL;
+    olnk_dos_disk_init(&g_dos_disks, false, NULL);
 
-    olnk_fat_build_synthetic_vbr(g_dos_ramdisk, 2UL, 0xF0U, "OPENSVR_DOS", 0x06220001UL);
-    olnk_mem_drive_init(&drv, g_dos_ramdisk, 2UL);
+    for (i = 1; i < argc; ++i) {
+        const char *arg = argv[i];
+        if ((strcmp(arg, "/?") == 0) || str_ieq_prefix(arg, "/HELP") ||
+            (strcmp(arg, "--help") == 0) || (strcmp(arg, "-h") == 0)) {
+            print_dos_usage();
+            return 0;
+        }
+        if (str_ieq_prefix(arg, "/COM") && (arg[4] >= '1') && (arg[4] <= '4') && (arg[5] == '\0')) {
+            com_num = (uint8_t)(arg[4] - '0');
+        } else if (str_ieq_prefix(arg, "/BAUD:")) {
+            max_baud = parse_u32_ascii(&arg[6]);
+            if (!olnk_bps_to_baud_index(max_baud, &max_baud_idx)) {
+                printf("Unsupported baud rate: %lu\n", (unsigned long)max_baud);
+                return 2;
+            }
+        } else if (str_ieq_prefix(arg, "/RO") && (arg[3] == '\0')) {
+            read_only = true;
+        } else if (str_ieq_prefix(arg, "/BURST") && (arg[6] == '\0')) {
+            echo_mode = false;
+        } else if (str_ieq_prefix(arg, "/V") && (arg[2] == '\0')) {
+            echo_mode = true;
+        } else if (isalpha((unsigned char)arg[0]) && (arg[1] == ':') && (arg[2] == '\0')) {
+            uint8_t unit = (uint8_t)(toupper((unsigned char)arg[0]) - 'A');
+            g_dos_disks.read_only = read_only;
+            (void)olnk_dos_disk_add_unit(&g_dos_disks, unit);
+            explicit_drives = true;
+        }
+    }
 
-    if (olnk_server_init(&g_dos_server, tr, olnk_mem_drive_ops(&drv)) != OLNK_OK) {
+    g_dos_disks.read_only = read_only;
+    if (!explicit_drives) {
+        (void)olnk_dos_disk_add_unit(&g_dos_disks, 2U); /* Default: C: */
+    }
+    {
+        uint8_t u;
+        for (u = 0U; u < OLNK_MAX_DRIVES; ++u) {
+            if (g_dos_disks.enabled[u]) {
+                g_dos_disks.info[u].write_protected = read_only;
+            }
+        }
+    }
+
+    if (olnk_dos_uart_init(&g_dos_uart, com_num, 0U, 9600UL, NULL, &tr) != OLNK_OK) {
+        printf("Failed to initialize COM%u\n", (unsigned int)com_num);
         return 1;
     }
 
-    /* Verify Phase A sync state machine transitions cleanly on 16-bit target */
-    olnk_server_feed_bytes(&g_dos_server, sync_probe, sizeof(sync_probe));
-    if (g_dos_server.link.link_state != (uint8_t)OLNK_LINK_CONNECTED) {
-        return 2;
+    if (olnk_server_init(&g_dos_server, tr, olnk_dos_disk_ops(&g_dos_disks)) != OLNK_OK) {
+        return 1;
     }
 
-    printf("OPENSVR (libopenlnk 16-bit Real-Mode MS-DOS 6.22 server ready)\n");
+    g_dos_server.link.max_baud_idx = max_baud_idx;
+    g_dos_server.link.local_requires_echo = echo_mode;
+    g_dos_server.idle_disconnect_ms = 3000UL;
+    olnk_server_set_event_callback(&g_dos_server, on_dos_server_event, NULL);
+
+    printf("OPENSVR 0.2.0 ready on COM%u (0x%03X, %s, max %lu bps%s)\n",
+           (unsigned int)com_num,
+           (unsigned int)g_dos_uart.io_base,
+           g_dos_uart.has_fifo ? "16550A FIFO" : "8250/16450",
+           (unsigned long)olnk_baud_index_to_bps(max_baud_idx),
+           read_only ? ", READ-ONLY" : "");
+
+#if defined(__WATCOMC__) && defined(__DOS__)
+    printf("Press ESC or Q to exit.\n");
+    for (;;) {
+        if (kbhit() != 0) {
+            int ch = getch();
+            if ((ch == 27) || (ch == 'q') || (ch == 'Q') || (ch == 3)) {
+                break;
+            }
+        }
+        (void)olnk_server_poll(&g_dos_server, 55U);
+    }
+    printf("OPENSVR stopped (rpcs=%lu, rd=%lu, wr=%lu, err=%lu)\n",
+           (unsigned long)g_dos_server.rpc_count,
+           (unsigned long)g_dos_server.sectors_read_total,
+           (unsigned long)g_dos_server.sectors_written_total,
+           (unsigned long)g_dos_server.link.frames_rx_err);
+#endif
     return 0;
 }

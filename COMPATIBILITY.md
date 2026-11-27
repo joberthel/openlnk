@@ -9,7 +9,7 @@ This document tracks objective verification evidence against the 5-Stage Definit
 | **Level 1** | Physical Link | `TC_LINK_01` | Successful handshake over COM port at all baud rates (`9600`, `19200`, `38400`, `57600`, `115200` bps) | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/01_handshake_9600.hexlog.gz`, `02_handshake_115200.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
 | **Level 2** | Discovery & Protocol | `TC_DISC_01` | Reliable enumeration of all remote drives (BPB/DPB/FAT12/FAT16) in MS-DOS 6.22 | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/04_bpb_query_fat16.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
 | **Level 3** | Raw Sector I/O | `TC_SEC_01` | Error-free reading and writing of 1,000 randomized sectors via Differential Oracle (86Box) | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/05_read_sector_single.hexlog.gz`, `06_write_sector_multi.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
-| **Level 4** | High-Level DOS Workflows | `TC_DOS_01` | Successful execution of `DIR X:`, `COPY`, `FC /B`, `CHKDSK`, and `FORMAT` (V-FAT) | `VERIFIED (Bidirectional 86Box Oracle)` | `2026-11-27` | `INTERLNK.EXE` ↔ `opensvr` AND `openlnk` ↔ `INTERSVR.EXE` live in 86Box |
+| **Level 4** | High-Level DOS Workflows | `TC_DOS_01` | Successful execution of `DIR X:`, `COPY`, `FC /B`, `CHKDSK`, and `FORMAT` (V-FAT) | `VERIFIED (Bidirectional 86Box Oracle)` | `2026-11-27` | `INTERLNK.EXE` ↔ `opensvr` (VHD + `--dir` RW V-FAT) AND `openlnk` ↔ `INTERSVR.EXE` live in 86Box |
 | **Level 5** | Multi-Platform Parity | `TC_PLAT_01` | ESP32 serves FAT16 SD card over MAX3232 UART to real IBM PC/XT 5160 with zero transfer errors | `PENDING` | — | Hardware test log |
 
 ## 2. Golden Trace Capture & Verification Matrix (Agent A Ground Truth ↔ Agent B C99 Parity)
@@ -33,7 +33,7 @@ All 7 Golden Traces have been 100% deterministically decoded and verified (**774
 | Linux x86_64 Desktop | GCC / Clang (`-std=c99 -Werror -pedantic`) | Zero `malloc`, Zero FP | `CONFIGURED (CI)` | `READY (CI)` |
 | macOS ARM64 Desktop | Apple Clang (`-std=c99 -Werror -pedantic -Wconversion`) | Zero `malloc`, Zero FP | `PASS` | `PASS (CTest, self-test, 24/24 parity, 86Box Live Oracle)` |
 | Windows x64 Desktop | MSVC (`/W4 /WX`) | Zero `malloc`, Zero FP | `CONFIGURED (CI, _WIN32 audited)` | `READY (CI)` |
-| MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we`) | 8086/8088 / NEC V30 | `STRICT C99 PASS (Watcom CI)` | `PENDING (86Box Live)` |
+| MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we`) | 8086/8088 / NEC V30 (`8250/16550A` + `INT 25h/26h`) | `STRICT C99 PASS (Watcom CI)` | `PASS (83/83 Sim-16550A CTest), 86Box DOS EXE PENDING` |
 | ESP32 Embedded | ESP-IDF 5.x / PlatformIO / Arduino | MAX3232 UART + SDMMC | `STRICT C99 PASS (Manifest Ready)` | `PENDING (HW)` |
 
 ## 4. Automated Verification Pipeline Gates

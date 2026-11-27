@@ -63,4 +63,20 @@ if(OPENLNK_BUILD_TESTS)
         target_compile_options(test_libopenlnk PRIVATE -Wall -Wextra -Werror -pedantic)
     endif()
     add_test(NAME libopenlnk_unit_loopback COMMAND test_libopenlnk)
+
+    add_executable(test_dos_hal
+        tests/test_dos_hal.c
+        dos/dos_hal_uart.c
+        dos/dos_hal_disk.c
+        dos/openlnk_sys_stub.c
+    )
+    target_include_directories(test_dos_hal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dos)
+    target_link_libraries(test_dos_hal PRIVATE openlnk_static)
+    if(MSVC)
+        target_compile_options(test_dos_hal PRIVATE /W4 /WX)
+        target_compile_definitions(test_dos_hal PRIVATE _CRT_SECURE_NO_WARNINGS)
+    else()
+        target_compile_options(test_dos_hal PRIVATE -Wall -Wextra -Werror -pedantic)
+    endif()
+    add_test(NAME libopenlnk_dos_hal_16bit COMMAND test_dos_hal)
 endif()

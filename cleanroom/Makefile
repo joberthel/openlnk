@@ -9,7 +9,7 @@ CORE_OBJS := $(CORE_SRCS:.c=.o)
 
 .PHONY: all test clean
 
-all: libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk
+all: libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk test_dos_hal
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
@@ -29,10 +29,14 @@ openlnk-vector-check: desktop/vector_check.c libopenlnk.a
 test_libopenlnk: tests/test_libopenlnk.c libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_libopenlnk.c libopenlnk.a -o $@
 
+test_dos_hal: tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/openlnk_sys_stub.c libopenlnk.a
+	$(CC) $(CFLAGS) $(INCLUDES) -Idos tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/openlnk_sys_stub.c libopenlnk.a -o $@
+
 test: all
 	./test_libopenlnk
+	./test_dos_hal
 	./opensvr --self-test
 	./openlnk --self-test
 
 clean:
-	rm -f $(CORE_OBJS) libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk
+	rm -f $(CORE_OBJS) libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk test_dos_hal
