@@ -71,7 +71,9 @@ typedef struct {
     uint8_t com_number;      /* 1..4 */
     bool has_fifo;           /* True if 16550A FIFO detected */
     uint32_t line_errors;    /* Count of LSR OE/PE/FE observations */
-    olnk_dos_io_ops_t io;    /* Uses hardware in/out/INT 1Ah when callbacks NULL */
+#if !defined(__WATCOMC__) || !defined(__DOS__)
+    olnk_dos_io_ops_t io;    /* Injectable mock hooks for host unit tests */
+#endif
 } olnk_dos_uart_t;
 
 /**

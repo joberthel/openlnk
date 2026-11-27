@@ -10,23 +10,55 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__WATCOMC__) && defined(__DOS__)
+static void watcom_rep_stosb(void *dst, uint8_t val, size_t len);
+#pragma aux watcom_rep_stosb = \
+    "push es"                  \
+    "push ds"                  \
+    "pop es"                   \
+    "cld"                      \
+    "rep stosb"                \
+    "pop es"                   \
+    parm [di] [al] [cx]        \
+    modify [di cx];
+
+static void watcom_rep_movsb(void *dst, const void *src, size_t len);
+#pragma aux watcom_rep_movsb = \
+    "push es"                  \
+    "push ds"                  \
+    "pop es"                   \
+    "cld"                      \
+    "rep movsb"                \
+    "pop es"                   \
+    parm [di] [si] [cx]        \
+    modify [si di cx];
+#endif
+
 void *memset(void *dst, int ch, size_t len) {
+#if defined(__WATCOMC__) && defined(__DOS__)
+    watcom_rep_stosb(dst, (uint8_t)ch, len);
+#else
     uint8_t *p = (uint8_t *)dst;
     uint8_t val = (uint8_t)ch;
     size_t i;
     for (i = 0U; i < len; ++i) {
         p[i] = val;
     }
+#endif
     return dst;
 }
 
 void *memcpy(void *dst, const void *src, size_t len) {
+#if defined(__WATCOMC__) && defined(__DOS__)
+    watcom_rep_movsb(dst, src, len);
+#else
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     size_t i;
     for (i = 0U; i < len; ++i) {
         d[i] = s[i];
     }
+#endif
     return dst;
 }
 

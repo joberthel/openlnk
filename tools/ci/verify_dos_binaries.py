@@ -5,10 +5,11 @@ Checks shared across CI (.github/workflows/ci.yml) and Release builds
 (.github/workflows/release.yml):
   - OPENSVR.EXE & OPENLNK.EXE: valid DOS MZ header, strict size budgets,
     zero clibs.lib linkage (100% Zero-CRT).
-  - OPENLNK.SYS: zero clibs.lib linkage, exact disk == _sys_bss_start match,
-    disk <= 15 KiB, resident RAM <= 28 KiB (< 64 KiB single-segment limit),
-    valid MS-DOS Block Device Driver header (FF FF FF FF, attr 0x2842,
-    valid Strategy/Interrupt entrypoints, 'OPENLNK' signature).
+  - OPENLNK.SYS: zero clibs.lib linkage, exact disk == _sys_init_end match
+    (discardable INIT_TEXT/INIT_DATA placed strictly after _sys_resident_end),
+    disk <= 16.5 KiB, max resident RAM (_sys_resident_end, 8 units) <= 14.5 KiB
+    (< 64 KiB single-segment limit), valid MS-DOS Block Device Driver header
+    (FF FF FF FF, attr 0x2842, valid Strategy/Interrupt entrypoints, 'OPENLNK').
 """
 
 from __future__ import annotations
@@ -20,12 +21,12 @@ import sys
 from pathlib import Path
 
 EXE_BUDGETS: tuple[tuple[str, str, int], ...] = (
-    ("OPENSVR.EXE", "OPENSVR.MAP", 17408),
-    ("OPENLNK.EXE", "OPENLNKX.MAP", 13312),
+    ("OPENSVR.EXE", "OPENSVR.MAP", 17152),
+    ("OPENLNK.EXE", "OPENLNKX.MAP", 12288),
 )
 
-SYS_MAX_DISK_BYTES = 15360
-SYS_MAX_RESIDENT_BYTES = 28672
+SYS_MAX_DISK_BYTES = 16896
+SYS_MAX_RESIDENT_BYTES = 14848
 
 
 def verify_dos_binaries(build_dir: Path) -> list[str]:
@@ -68,15 +69,24 @@ def verify_dos_binaries(build_dir: Path) -> list[str]:
 
     bss_m = re.search(r"^([0-9a-fA-F]+)\*?\+?\s+_sys_bss_start$", sys_map, re.M)
     res_m = re.search(r"^([0-9a-fA-F]+)\*?\+?\s+_sys_resident_end$", sys_map, re.M)
-    if not (bss_m and res_m):
-        raise AssertionError("Missing _sys_bss_start or _sys_resident_end in OPENLNK.MAP")
+    init_m = re.search(r"^([0-9a-fA-F]+)\*?\+?\s+_sys_init_end$", sys_map, re.M)
+    if not (bss_m and res_m and init_m):
+        raise AssertionError(
+            "Missing _sys_bss_start, _sys_resident_end, or _sys_init_end in OPENLNK.MAP"
+        )
 
     bss_start = int(bss_m.group(1), 16)
     res_end = int(res_m.group(1), 16)
+    init_end = int(init_m.group(1), 16)
 
-    if len(sys_data) != bss_start:
+    if not (0 < bss_start < res_end < init_end):
         raise AssertionError(
-            f"OPENLNK.SYS disk ({len(sys_data)} B) != _sys_bss_start ({bss_start} B)"
+            f"Invalid OPENLNK.SYS layout: bss_start=0x{bss_start:X}, "
+            f"resident_end=0x{res_end:X}, init_end=0x{init_end:X}"
+        )
+    if len(sys_data) != init_end:
+        raise AssertionError(
+            f"OPENLNK.SYS disk ({len(sys_data)} B) != _sys_init_end ({init_end} B)"
         )
     if len(sys_data) > SYS_MAX_DISK_BYTES:
         raise AssertionError(
@@ -93,16 +103,18 @@ def verify_dos_binaries(build_dir: Path) -> list[str]:
         raise AssertionError(f"Expected FF FF FF FF header, got 0x{nxt:08X}")
     if attr != 0x2842:
         raise AssertionError(f"Expected attr 0x2842, got 0x{attr:04X}")
-    if not (0x0012 <= strat < len(sys_data)):
+    if not (0x0012 <= strat < bss_start):
         raise AssertionError(f"Invalid Strategy offset 0x{strat:04X}")
-    if not (0x0012 <= intr < len(sys_data)):
+    if not (0x0012 <= intr < bss_start):
         raise AssertionError(f"Invalid Interrupt offset 0x{intr:04X}")
     if sig != b"OPENLNK":
         raise AssertionError(f"Invalid driver signature {sig!r}")
 
+    discarded = init_end - res_end
     summary.append(
-        f"Verified OPENLNK.SYS: disk={len(sys_data)} B (== _sys_bss_start), "
-        f"resident={res_end} B ({res_end / 1024:.2f} KiB), attr=0x{attr:04X}, "
+        f"Verified OPENLNK.SYS: disk={len(sys_data)} B (== _sys_init_end), "
+        f"resident_max={res_end} B ({res_end / 1024:.2f} KiB <= {SYS_MAX_RESIDENT_BYTES} B), "
+        f"discarded_init={discarded} B, attr=0x{attr:04X}, "
         f"strat=0x{strat:04X}, intr=0x{intr:04X}, sig={sig!r}"
     )
     return summary

@@ -259,19 +259,38 @@ class TestReleaseMetadataAndDosVerifier(unittest.TestCase):
             (bdir / "OPENLNKX.MAP").write_text("Open Watcom Linker\n", encoding="utf-8")
 
             sys_hdr = struct.pack("<IHHHB", 0xFFFFFFFF, 0x2842, 0x0012, 0x001D, 0) + b"OPENLNK"
-            sys_body = sys_hdr + b"\x00" * (256 - len(sys_hdr))
+            sys_body = sys_hdr + b"\x00" * (0x500 - len(sys_hdr))
             (bdir / "OPENLNK.SYS").write_bytes(sys_body)
             (bdir / "OPENLNK.MAP").write_text(
                 "Open Watcom Linker\n"
                 "0100  _sys_bss_start\n"
-                "0400  _sys_resident_end\n",
+                "0400  _sys_resident_end\n"
+                "0500  _sys_init_end\n",
                 encoding="utf-8",
             )
 
             lines = verify_dos_binaries.verify_dos_binaries(bdir)
             self.assertEqual(len(lines), 3)
 
-            # Reject accidental clibs.lib linkage
+            # Reject accidental resident RAM regression above tightened budget
+            (bdir / "OPENLNK.MAP").write_text(
+                "Open Watcom Linker\n"
+                "0100  _sys_bss_start\n"
+                "4000  _sys_resident_end\n"
+                "4500  _sys_init_end\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(AssertionError):
+                verify_dos_binaries.verify_dos_binaries(bdir)
+
+            # Restore valid SYS map and reject accidental clibs.lib linkage
+            (bdir / "OPENLNK.MAP").write_text(
+                "Open Watcom Linker\n"
+                "0100  _sys_bss_start\n"
+                "0400  _sys_resident_end\n"
+                "0500  _sys_init_end\n",
+                encoding="utf-8",
+            )
             (bdir / "OPENSVR.MAP").write_text("clibs.lib(cstart)\n", encoding="utf-8")
             with self.assertRaises(AssertionError):
                 verify_dos_binaries.verify_dos_binaries(bdir)

@@ -24,9 +24,11 @@ WLIB    = wlib
 # -zm   : Place each function in its own COMDAT segment for linker dead-code elimination
 # -s    : Omit __STK stack-probe calls (all large contexts are static, never on stack)
 # -zl   : Omit default clibs.lib request (all 3 targets are 100% freestanding Zero-CRT)
-MAX_PAYLOAD ?= 8192
-CFLAGS      = -ms -0 -za99 -wx -we -os -zm -s -zl -bt=dos -DOLNK_MAX_PAYLOAD_SIZE=$(MAX_PAYLOAD)U -i=../include
-ASFLAGS     = -0 -ms -wx -we -q
+MAX_PAYLOAD     ?= 8192
+SYS_MAX_PAYLOAD ?= 2048
+CFLAGS          = -ms -0 -za99 -wx -we -os -zm -s -zl -bt=dos -DOLNK_MAX_PAYLOAD_SIZE=$(MAX_PAYLOAD)U -i=../include
+SYS_CFLAGS      = -ms -0 -za99 -wx -we -os -zm -s -zl -bt=dos -DOLNK_MAX_PAYLOAD_SIZE=$(SYS_MAX_PAYLOAD)U -DOLNK_CLIENT_CTRL_BUF_SIZE=96U -DOLNK_SYS_DRIVER=1 -i=../include
+ASFLAGS         = -0 -ms -wx -we -q
 
 BUILD_DIR = build
 
@@ -51,11 +53,11 @@ SYS_OBJS = \
 	$(BUILD_DIR)/openlnk_sys_entry.obj \
 	$(BUILD_DIR)/openlnk_sys_stub.obj \
 	$(BUILD_DIR)/dos_sys_rt.obj \
-	$(BUILD_DIR)/dos_hal_uart.obj \
-	$(BUILD_DIR)/openlnk.obj \
-	$(BUILD_DIR)/client.obj \
-	$(BUILD_DIR)/protocol.obj \
-	$(BUILD_DIR)/crc16.obj
+	$(BUILD_DIR)/sys_hal_uart.obj \
+	$(BUILD_DIR)/sys_openlnk.obj \
+	$(BUILD_DIR)/sys_client.obj \
+	$(BUILD_DIR)/sys_protocol.obj \
+	$(BUILD_DIR)/sys_crc16.obj
 
 EXE_ORDER = order clname CODE segment BEGTEXT clname BEGDATA clname DATA clname BSSBEG clname BSS clname BSSEND clname STACK
 
@@ -112,22 +114,37 @@ $(BUILD_DIR)/OPENSVR.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/opensvr_main.obj $(DOS_HA
 $(BUILD_DIR)/OPENLNK.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/openlnk_main.obj $(BUILD_DIR)/dos_hal_uart.obj $(BUILD_DIR)/dos_hal_io.obj $(BUILD_DIR)/libolnk.lib
 	$(WLINK) system dos option quiet option nodefaultlibs option eliminate option start=_exe_start option stack=3072 option map=$(BUILD_DIR)/OPENLNKX.MAP $(EXE_ORDER) name $@ file $(BUILD_DIR)/dos_exe_crt0.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/openlnk_main.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/dos_hal_io.obj library $(BUILD_DIR)/libolnk.lib
 
-# Freestanding Zero-CRT OPENLNK.SYS Block Device Driver
+# Freestanding Zero-CRT OPENLNK.SYS Block Device Driver (separate tight-RAM compile)
 $(BUILD_DIR)/openlnk_sys_entry.obj: openlnk_sys_entry.asm
 	$(AS) $(ASFLAGS) -fo=$@ openlnk_sys_entry.asm
 
 $(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h ../include/openlnk/version.h
-	$(CC) $(CFLAGS) -fo=$@ openlnk_sys_stub.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ openlnk_sys_stub.c
+
+$(BUILD_DIR)/sys_hal_uart.obj: dos_hal_uart.c dos_hal_uart.h
+	$(CC) $(SYS_CFLAGS) -fo=$@ dos_hal_uart.c
+
+$(BUILD_DIR)/sys_openlnk.obj: ../src/openlnk.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/openlnk.c
+
+$(BUILD_DIR)/sys_client.obj: ../src/client.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/client.c
+
+$(BUILD_DIR)/sys_protocol.obj: ../src/protocol.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/protocol.c
+
+$(BUILD_DIR)/sys_crc16.obj: ../src/crc16.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/crc16.c
 
 $(BUILD_DIR)/OPENLNK.SYS: $(SYS_OBJS)
-	$(WLINK) format raw bin option quiet option nodefaultlibs option eliminate option start=_sys_dev_header option map=$(BUILD_DIR)/OPENLNK.MAP order clname CODE segment SYS_HEAD clname DATA clname BSS noemit clname BSSEND noemit clname STACK noemit name $@ file $(BUILD_DIR)/openlnk_sys_entry.obj file $(BUILD_DIR)/openlnk_sys_stub.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/openlnk.obj file $(BUILD_DIR)/client.obj file $(BUILD_DIR)/protocol.obj file $(BUILD_DIR)/crc16.obj
-	@bss_hex=$$(awk '/_sys_bss_start/ { sub(/\*$$/, "", $$1); print $$1; exit }' $(BUILD_DIR)/OPENLNK.MAP); \
-	bss_dec=$$((0x$$bss_hex)); \
+	$(WLINK) format raw bin option quiet option nodefaultlibs option eliminate disable 1014 option start=_sys_dev_header option map=$(BUILD_DIR)/OPENLNK.MAP order clname CODE segment SYS_HEAD clname DATA clname BSS clname BSSEND clname DRVSTK clname UNIT_BSS clname RESEND clname INIT_CODE clname INIT_DATA clname INIT_END name $@ file $(BUILD_DIR)/openlnk_sys_entry.obj file $(BUILD_DIR)/openlnk_sys_stub.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/sys_hal_uart.obj file $(BUILD_DIR)/sys_openlnk.obj file $(BUILD_DIR)/sys_client.obj file $(BUILD_DIR)/sys_protocol.obj file $(BUILD_DIR)/sys_crc16.obj
+	@end_hex=$$(awk '/_sys_init_end/ { sub(/[*+]$$/, "", $$1); print $$1; exit }' $(BUILD_DIR)/OPENLNK.MAP); \
+	end_dec=$$((0x$$end_hex)); \
 	fsize=$$(wc -c < $@ | tr -d ' '); \
-	if [ "$$fsize" -lt "$$bss_dec" ]; then \
-		dd if=/dev/zero bs=1 count=$$((bss_dec - fsize)) >> $@ 2>/dev/null; \
-	elif [ "$$fsize" -gt "$$bss_dec" ]; then \
-		echo "ERROR: $@ ($$fsize B) exceeds _sys_bss_start ($$bss_dec B / 0x$$bss_hex)" >&2; \
+	if [ "$$fsize" -lt "$$end_dec" ]; then \
+		dd if=/dev/zero bs=1 count=$$((end_dec - fsize)) >> $@ 2>/dev/null; \
+	elif [ "$$fsize" -gt "$$end_dec" ]; then \
+		echo "ERROR: $@ ($$fsize B) exceeds _sys_init_end ($$end_dec B / 0x$$end_hex)" >&2; \
 		exit 1; \
 	fi
 

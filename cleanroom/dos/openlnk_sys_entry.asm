@@ -1,22 +1,24 @@
 ; cleanroom/dos/openlnk_sys_entry.asm
 ;
 ; Clean-room 16-bit Real-Mode MS-DOS 5.0/6.22 Block Device Driver (OPENLNK.SYS)
-; assembly entry stub, private 2048-byte driver stack, far-memory copy helpers,
+; assembly entry stub, private 896-byte driver stack, far-memory copy helpers,
 ; and pure-8086 32-bit unsigned multiply/divide helpers (zero CRT).
 ;
 ; Single-segment Tiny/DGROUP layout (CS == DS == ES == SS, <= 64 KiB):
-;   Offset 0x0000 : 18-byte MS-DOS Block Device Driver Header (_TEXT)
-;   Code          : _TEXT
-;   Read-only     : CONST, CONST2
-;   Init Data     : _DATA
+;   Offset 0x0000 : 18-byte MS-DOS Block Device Driver Header (SYS_HEAD)
+;   Resident Code : _TEXT
+;   Resident Data : CONST, CONST2, _DATA
 ;   Zero-init BSS : _BSS .. _BSSEND (explicitly zeroed on first Interrupt call)
-;   Private Stack : _STACK (2048 bytes, ending at _sys_resident_end)
+;   Private Stack : _DRVSTK (private 8088-safe driver stack)
+;   Unit Tables   : _UNIT_BSS (per-unit BPB/label slots; trimmed to /DRIVES:<N>)
+;   --- Break Address <= _sys_resident_end (MS-DOS reclaims everything above) ---
+;   Discard INIT  : INIT_TEXT, INIT_DATA .. _sys_init_end (freed after Cmd 0x00)
 ;
 ; Strictly 8086/8088 compatible (assembled with Open Watcom WASM -0 -ms -wx -we).
 
         .8086
 
-DGROUP  GROUP SYS_HEAD, _TEXT, CONST, CONST2, _DATA, _BSS, _BSSEND, _STACK
+DGROUP  GROUP SYS_HEAD, _TEXT, CONST, CONST2, _DATA, _BSS, _BSSEND, _DRVSTK, _UNIT_BSS, _RESEND, INIT_TEXT, INIT_DATA, _INITEND
 
         EXTRN _olnk_dos_sys_interrupt_c:NEAR
 
@@ -52,7 +54,7 @@ _sys_strategy ENDP
 ; ============================================================================
 ; MS-DOS Interrupt Entry (FAR):
 ;   1. Preserves all 8086 registers & flags on DOS stack
-;   2. Switches SS:SP atomically (8088-safe) to private 2048-byte driver stack
+;   2. Switches SS:SP atomically (8088-safe) to private 896-byte driver stack
 ;   3. Sets DS = ES = CS (DGROUP) and clears DF
 ;   4. Zeroes _BSS once on first invocation (MS-DOS does not zero .SYS BSS)
 ;   5. Dispatches into C99 Request-Header marshaller
@@ -130,12 +132,10 @@ bss_ready:
 _sys_interrupt ENDP
 
 ; ============================================================================
-; 8086 Far-Memory & Driver Support Helpers (called from C via #pragma aux)
+; 8086 Far-Memory Helpers (called from C via #pragma aux)
 ; ============================================================================
         PUBLIC _sys_asm_far_read
         PUBLIC _sys_asm_far_write
-        PUBLIC _sys_asm_set_header_units
-        PUBLIC _sys_asm_dos_print
 
 ; Copy CX bytes from far AX:SI into near CS:DI (preserves all registers)
 _sys_asm_far_read PROC NEAR
@@ -184,21 +184,6 @@ fw_done:
         pop ds
         ret
 _sys_asm_far_write ENDP
-
-; Patch header byte +0x0A (unit_count) with AL
-_sys_asm_set_header_units PROC NEAR
-        mov byte ptr cs:[_sys_header_units], al
-        ret
-_sys_asm_set_header_units ENDP
-
-; Print '$'-terminated string at DS:DX via INT 21h AH=09h (ONLY during INIT!)
-_sys_asm_dos_print PROC NEAR
-        push ax
-        mov ah, 09h
-        int 21h
-        pop ax
-        ret
-_sys_asm_dos_print ENDP
 
 ; ============================================================================
 ; Pure-8086 32-Bit Math Helpers for Open Watcom Zero-CRT Linking
@@ -302,12 +287,62 @@ _BSSEND SEGMENT BYTE PUBLIC USE16 'BSSEND'
 _sys_bss_end    label byte
 _BSSEND ENDS
 
-_STACK  SEGMENT PARA PUBLIC USE16 'STACK'
+; Private 8088-safe driver stack (896 B: live MS-DOS 6.22 peak measured at 464 B
+; across online/offline INIT, 24 KiB COPY/FC, CHKDSK, VOL/IOCTL, and lazy-connect,
+; leaving +432 B safety headroom; uses class 'DRVSTK' rather than 'STACK' so
+; wlink does not force a default 4096-byte EXE stack minimum before INIT_TEXT).
+_DRVSTK SEGMENT PARA PUBLIC USE16 'DRVSTK'
+        PUBLIC _sys_stack_bottom
         PUBLIC _sys_stack_top
-        PUBLIC _sys_resident_end
-_sys_stack_area db 2048 dup (?)
+_sys_stack_bottom label byte
+_sys_stack_area db 896 dup (0)
 _sys_stack_top  label byte
+_DRVSTK ENDS
+
+_UNIT_BSS SEGMENT WORD PUBLIC USE16 'UNIT_BSS'
+        PUBLIC _sys_units_base
+_sys_units_base label byte
+_UNIT_BSS ENDS
+
+_RESEND SEGMENT BYTE PUBLIC USE16 'RESEND'
+        PUBLIC _sys_resident_end
 _sys_resident_end label byte
-_STACK  ENDS
+_RESEND ENDS
+
+; ============================================================================
+; Discardable INIT-Only Helpers (reclaimed by MS-DOS after Cmd 0x00 returns)
+; ============================================================================
+INIT_TEXT SEGMENT BYTE PUBLIC USE16 'INIT_CODE'
+        ASSUME CS:DGROUP, DS:DGROUP, SS:DGROUP
+
+        PUBLIC _sys_asm_set_header_units
+        PUBLIC _sys_asm_dos_print
+
+; Patch header byte +0x0A (unit_count) with AL
+_sys_asm_set_header_units PROC NEAR
+        mov byte ptr cs:[_sys_header_units], al
+        ret
+_sys_asm_set_header_units ENDP
+
+; Print '$'-terminated string at DS:DX via INT 21h AH=09h (ONLY during INIT!)
+_sys_asm_dos_print PROC NEAR
+        push ax
+        mov ah, 09h
+        int 21h
+        pop ax
+        ret
+_sys_asm_dos_print ENDP
+
+INIT_TEXT ENDS
+
+INIT_DATA SEGMENT WORD PUBLIC USE16 'INIT_DATA'
+        ; Pin _sys_init_end in OPENLNK.MAP (discarded after INIT; 0 B resident)
+        dw offset DGROUP:_sys_init_end
+INIT_DATA ENDS
+
+_INITEND SEGMENT BYTE PUBLIC USE16 'INIT_END'
+        PUBLIC _sys_init_end
+_sys_init_end   label byte
+_INITEND ENDS
 
         END _sys_dev_header
