@@ -8,9 +8,6 @@
 #include <string.h>
 
 #if defined(__WATCOMC__) && defined(__DOS__)
-#include <conio.h>
-#include <i86.h>
-
 /* 8086-safe BIOS Data Area (0040:offset) word read without far keywords (-za99) */
 static uint16_t watcom_read_bda_u16(uint16_t bda_off);
 #pragma aux watcom_read_bda_u16 = \
@@ -21,6 +18,37 @@ static uint16_t watcom_read_bda_u16(uint16_t bda_off);
     "pop es"                      \
     parm [bx]                     \
     value [ax];
+
+/* 8086-safe zero-CRT port I/O (eliminates clibs inp_/outp_ dependency) */
+static uint8_t watcom_in8(uint16_t port);
+#pragma aux watcom_in8 = \
+    "in al, dx"          \
+    parm [dx]            \
+    value [al];
+
+static void watcom_out8(uint16_t port, uint8_t val);
+#pragma aux watcom_out8 = \
+    "out dx, al"          \
+    parm [dx] [al];
+
+/*
+ * 8086-safe zero-CRT BIOS 18.2 Hz timer tick counter (0040:006C DWORD).
+ * Uses a lock-free high/low/high consistency loop so it is safe inside
+ * resident device drivers without disturbing the BIOS midnight date flag.
+ */
+static uint32_t watcom_read_bda_ticks(void);
+#pragma aux watcom_read_bda_ticks = \
+    "push es"                       \
+    "mov ax, 0040h"                 \
+    "mov es, ax"                    \
+    "L1:"                           \
+    "mov dx, es:[006eh]"            \
+    "mov ax, es:[006ch]"            \
+    "cmp dx, es:[006eh]"            \
+    "jne L1"                        \
+    "pop es"                        \
+    value [dx ax]                   \
+    modify [ax dx];
 #endif
 
 #define OLNK_UART_TX_SPIN_LIMIT 60000UL
@@ -35,7 +63,7 @@ static uint8_t hw_in8(const olnk_dos_uart_t *uart, uint16_t port) {
         return uart->io.in8(port, uart->io.ctx);
     }
 #if defined(__WATCOMC__) && defined(__DOS__)
-    return (uint8_t)(inp((unsigned int)port) & 0xFFU);
+    return watcom_in8(port);
 #else
     (void)port;
     return 0xFFU;
@@ -48,7 +76,7 @@ static void hw_out8(const olnk_dos_uart_t *uart, uint16_t port, uint8_t val) {
         return;
     }
 #if defined(__WATCOMC__) && defined(__DOS__)
-    (void)outp((unsigned int)port, (unsigned int)val);
+    watcom_out8(port, val);
 #else
     (void)port;
     (void)val;
@@ -60,14 +88,7 @@ uint32_t olnk_dos_get_ticks(const olnk_dos_uart_t *uart) {
         return uart->io.get_ticks(uart->io.ctx);
     }
 #if defined(__WATCOMC__) && defined(__DOS__)
-    {
-        union REGS in_r;
-        union REGS out_r;
-        memset(&in_r, 0, sizeof(in_r));
-        in_r.h.ah = 0x00U;
-        (void)int86(0x1A, &in_r, &out_r);
-        return (((uint32_t)out_r.x.cx) << 16U) | (uint32_t)out_r.x.dx;
-    }
+    return watcom_read_bda_ticks();
 #else
     return 0UL;
 #endif

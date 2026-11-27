@@ -728,10 +728,475 @@ static void test_openlnk_sys_over_simulated_16550a_uart(void) {
           "both 16550A UARTs re-negotiated back to 115200 bps (divisor=1)");
 }
 
+/* =========================================================================
+ * Test 4: CONFIG.SYS Argument Parser & Binary MS-DOS Request Header Marshalling
+ * ========================================================================= */
+
+#define SIM_DOS_RAM_SIZE 131072UL /* 128 KiB flat real-mode address space */
+
+typedef struct {
+    uint8_t ram[SIM_DOS_RAM_SIZE];
+    uint8_t header_units;
+    char init_banner[128];
+    bool wrap_violation;
+    uint32_t far_reads;
+    uint32_t far_writes;
+} sim_dos_mem_t;
+
+static sim_dos_mem_t g_sim_mem;
+
+static void sim_mem_far_read(
+    uint16_t seg,
+    uint16_t off,
+    void *dst,
+    uint16_t len,
+    void *ctx
+) {
+    sim_dos_mem_t *m = (sim_dos_mem_t *)ctx;
+    uint32_t lin = (((uint32_t)seg) << 4U) + (uint32_t)off;
+    if (((uint32_t)off + (uint32_t)len) > 65536UL) {
+        m->wrap_violation = true;
+    }
+    if ((lin + (uint32_t)len) <= SIM_DOS_RAM_SIZE) {
+        memcpy(dst, &m->ram[lin], (size_t)len);
+    } else {
+        memset(dst, 0, (size_t)len);
+    }
+    m->far_reads += 1UL;
+}
+
+static void sim_mem_far_write(
+    uint16_t seg,
+    uint16_t off,
+    const void *src,
+    uint16_t len,
+    void *ctx
+) {
+    sim_dos_mem_t *m = (sim_dos_mem_t *)ctx;
+    uint32_t lin = (((uint32_t)seg) << 4U) + (uint32_t)off;
+    if (((uint32_t)off + (uint32_t)len) > 65536UL) {
+        m->wrap_violation = true;
+    }
+    if ((lin + (uint32_t)len) <= SIM_DOS_RAM_SIZE) {
+        memcpy(&m->ram[lin], src, (size_t)len);
+    }
+    m->far_writes += 1UL;
+}
+
+static void sim_mem_set_units(uint8_t units, void *ctx) {
+    sim_dos_mem_t *m = (sim_dos_mem_t *)ctx;
+    m->header_units = units;
+}
+
+static void sim_mem_print_init(const char *dollar_msg, void *ctx) {
+    sim_dos_mem_t *m = (sim_dos_mem_t *)ctx;
+    size_t i = 0U;
+    while ((dollar_msg[i] != '\0') && (i + 1U < sizeof(m->init_banner))) {
+        m->init_banner[i] = dollar_msg[i];
+        ++i;
+    }
+    m->init_banner[i] = '\0';
+}
+
+static uint32_t sim_lin(uint16_t seg, uint16_t off) {
+    return (((uint32_t)seg) << 4U) + (uint32_t)off;
+}
+
+static void test_openlnk_sys_config_parser(void) {
+    olnk_dos_sys_cfg_t cfg;
+
+    /* Driver header attributes contract */
+    CHECK(olnk_dos_header.next_driver == 0xFFFFFFFFUL, "header next_driver == 0xFFFFFFFF");
+    CHECK(olnk_dos_header.attributes == OLNK_DOS_SYS_HEADER_ATTR,
+          "header attrs == 0x2842 (Non-IBM|OpenCloseRM|GenIOCTL|LBA32)");
+    CHECK(memcmp(olnk_dos_header.reserved, "OPENLNK", 7U) == 0, "header signature == OPENLNK");
+
+    /* Defaults */
+    olnk_dos_sys_parse_args(NULL, &cfg);
+    CHECK((cfg.com_number == 1U) && (cfg.max_baud == 115200UL) && (cfg.max_units == 4U),
+          "NULL cmdline yields defaults (COM1, 115200, 4)");
+
+    /* Typical CONFIG.SYS line with driver path + CR/LF */
+    olnk_dos_sys_parse_args("C:\\DOS\\OPENLNK.SYS /COM2 /BAUD:57600 /DRIVES:2\r\n", &cfg);
+    CHECK((cfg.com_number == 2U) && (cfg.max_baud == 57600UL) && (cfg.max_units == 2U),
+          "CONFIG.SYS /COM2 /BAUD:57600 /DRIVES:2 parsed accurately");
+
+    /* Lowercase bare switches without filename prefix */
+    olnk_dos_sys_parse_args("  /com3\t/baud:38400  /drives:6  ", &cfg);
+    CHECK((cfg.com_number == 3U) && (cfg.max_baud == 38400UL) && (cfg.max_units == 6U),
+          "case-insensitive bare switches parsed accurately");
+
+    /* Alternate /COM:4 syntax + max drives 8 + lowest standard baud 9600 */
+    olnk_dos_sys_parse_args("OPENLNK.SYS /COM:4 /BAUD:9600 /DRIVES:8\nIGNORED /COM1", &cfg);
+    CHECK((cfg.com_number == 4U) && (cfg.max_baud == 9600UL) && (cfg.max_units == 8U),
+          "/COM:4 /BAUD:9600 /DRIVES:8 parsed and stops at newline");
+
+    /* Invalid values ignored cleanly */
+    olnk_dos_sys_parse_args("OPENLNK.SYS /COM5 /BAUD:99999 /DRIVES:0 /DRIVES:9 /UNKNOWN", &cfg);
+    CHECK((cfg.com_number == 1U) && (cfg.max_baud == 115200UL) && (cfg.max_units == 4U),
+          "out-of-range switches fall back cleanly to defaults");
+}
+
+static void test_openlnk_sys_rh_marshalling_over_16550a(void) {
+    olnk_dos_sys_mem_ops_t mem_ops;
+    olnk_dos_io_ops_t cli_io;
+    olnk_dos_io_ops_t srv_io;
+    olnk_dos_disk_hooks_t disk_hooks;
+    olnk_transport_t srv_tr;
+    const uint16_t rh_seg = 0x0100U;
+    const uint16_t rh_off = 0x0100U;
+    const uint16_t drv_seg = 0x0200U;
+    const uint16_t resident_end = 0x8450U;
+    uint32_t rh_lin = sim_lin(rh_seg, rh_off);
+    uint8_t *rh = &g_sim_mem.ram[rh_lin];
+    const char *cfg_line = "C:\\OPENLNK.SYS /COM1 /BAUD:115200 /DRIVES:4\r\n";
+    uint16_t st;
+    uint16_t bpb_arr_off;
+    uint16_t bpb_arr_seg;
+    uint16_t bpb_off;
+    uint16_t bpb_seg;
+    uint16_t vol_off;
+    uint16_t vol_seg;
+    uint8_t u;
+    size_t i;
+
+    memset(&g_sim_mem, 0, sizeof(g_sim_mem));
+    /* Place sentinel pattern at physical 0x0000..0x0FFF to detect any 64 KiB wraparound! */
+    memset(&g_sim_mem.ram[0], 0xEE, 4096U);
+
+    mem_ops.far_read = sim_mem_far_read;
+    mem_ops.far_write = sim_mem_far_write;
+    mem_ops.set_header_units = sim_mem_set_units;
+    mem_ops.print_init_msg = sim_mem_print_init;
+    mem_ops.host_table_base_off = 0x0400U;
+    mem_ops.ctx = &g_sim_mem;
+
+    /* Prepare server + disk (initially disconnected during offline boot INIT) */
+    memset(&g_cli_uart_hw, 0, sizeof(g_cli_uart_hw));
+    memset(&g_srv_uart_hw, 0, sizeof(g_srv_uart_hw));
+    g_cli_uart_hw.base_port = OLNK_DOS_COM1_BASE;
+    g_cli_uart_hw.chip = SIM_CHIP_16550A;
+    g_cli_uart_hw.peer = NULL; /* Offline during boot! */
+    g_cli_uart_hw.on_tx_pump = pump_dos_server;
+    g_cli_uart_hw.on_idle_tick = tick_dos_server;
+    g_cli_uart_hw.pump_ctx = &g_srv;
+    g_cli_uart_hw.auto_tick_on_idle = true;
+
+    g_srv_uart_hw.base_port = OLNK_DOS_COM2_BASE;
+    g_srv_uart_hw.chip = SIM_CHIP_16550A;
+    g_srv_uart_hw.peer = &g_cli_uart_hw;
+    g_srv_uart_hw.auto_tick_on_idle = false;
+
+    memset(&g_e2e_disk, 0, sizeof(g_e2e_disk));
+    g_e2e_disk.present = true;
+    g_e2e_disk.ready = true;
+    build_fat16_vbr(g_e2e_disk.sectors[0], SIM_DISK_SECTORS, 0x12345678UL, "OPENLNKDOS ");
+
+    disk_hooks.abs_read = mock_int25_read;
+    disk_hooks.abs_write = mock_int26_write;
+    disk_hooks.ctx = &g_e2e_disk;
+    olnk_dos_disk_init(&g_e2e_disk_set, false, &disk_hooks);
+    CHECK(olnk_dos_disk_add_unit(&g_e2e_disk_set, 2U), "RH test adds server C:");
+
+    srv_io = make_sim_io(&g_srv_uart_hw);
+    CHECK(olnk_dos_uart_init(&g_srv_uart, 2U, 0U, 9600UL, &srv_io, &srv_tr) == OLNK_OK,
+          "RH test server COM2 init");
+    CHECK(olnk_server_init(&g_srv, srv_tr, olnk_dos_disk_ops(&g_e2e_disk_set)) == OLNK_OK,
+          "RH test server engine init");
+    g_srv.link.max_baud_idx = (uint8_t)OLNK_BAUD_115200;
+    cli_io = make_sim_io(&g_cli_uart_hw);
+
+    /* 1. Cmd 0x00 INIT while server offline: reserves 4 units (D:-G:) with valid default BPBs */
+    memcpy(&g_sim_mem.ram[sim_lin(rh_seg, 0x0020U)], cfg_line, strlen(cfg_line) + 1U);
+    memset(rh, 0, 32U);
+    rh[0] = 23U;
+    rh[2] = OLNK_DOS_CMD_INIT;
+    olnk_write_u16_le(&rh[18], 0x0020U);
+    olnk_write_u16_le(&rh[20], rh_seg);
+    rh[22] = 3U; /* First drive = D: */
+
+    st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+    CHECK(st == OLNK_DOS_STATUS_DONE, "RH Cmd 0x00 INIT offline succeeds (0x0100)");
+    CHECK(olnk_read_u16_le(&rh[3]) == OLNK_DOS_STATUS_DONE, "RH INIT status written at rh+3");
+    CHECK((rh[13] == 4U) && (g_sim_mem.header_units == 4U),
+          "RH INIT reserves 4 units at rh+13 and patches header+0x0A");
+    CHECK((olnk_read_u16_le(&rh[14]) == resident_end) && (olnk_read_u16_le(&rh[16]) == drv_seg),
+          "RH INIT writes break address drv_seg:resident_end at rh+14");
+
+    bpb_arr_off = olnk_read_u16_le(&rh[18]);
+    bpb_arr_seg = olnk_read_u16_le(&rh[20]);
+    CHECK(bpb_arr_seg == drv_seg, "RH INIT BPB pointer array segment == drv_seg");
+    for (u = 0U; u < 4U; ++u) {
+        uint16_t entry_off = olnk_read_u16_le(&g_sim_mem.ram[sim_lin(bpb_arr_seg, (uint16_t)(bpb_arr_off + (uint16_t)(u * 2U)))]);
+        olnk_dos_bpb_t decoded;
+        CHECK(olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_arr_seg, entry_off)], OLNK_LEN_DOS_BPB, &decoded) == OLNK_OK,
+              "RH INIT BPB array entry decodes cleanly");
+        CHECK((decoded.bytes_per_sector == 512U) && (decoded.sectors_per_cluster == 2U) &&
+                  (decoded.media_descriptor == 0xF8U) && (decoded.total_sectors_16 == 20480U),
+              "RH INIT placeholder BPB is valid non-zero FAT16");
+    }
+    CHECK((strstr(g_sim_mem.init_banner, "OPENLNK.SYS") != NULL) &&
+              (strstr(g_sim_mem.init_banner, "D:-G:") != NULL) &&
+              (strstr(g_sim_mem.init_banner, "[standby]") != NULL) &&
+              (g_sim_mem.init_banner[strlen(g_sim_mem.init_banner) - 1U] == '$'),
+          "RH INIT prints $-terminated standby boot banner with drive range");
+
+    /* 2. Bring server online -> Cmd 0x01 MEDIA_CHECK lazily connects & forces 0xFF for BPB load */
+    g_cli_uart_hw.peer = &g_srv_uart_hw;
+    memset(rh, 0, 32U);
+    rh[0] = 19U;
+    rh[1] = 0U; /* unit 0 = D: */
+    rh[2] = OLNK_DOS_CMD_MEDIA_CHECK;
+    rh[13] = 0xF8U;
+    st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+    CHECK((st == OLNK_DOS_STATUS_DONE) && (olnk_read_u16_le(&rh[3]) == OLNK_DOS_STATUS_DONE),
+          "RH Cmd 0x01 MEDIA_CHECK lazily connects after offline boot");
+    CHECK(rh[14] == (uint8_t)OLNK_MEDIA_CHANGED,
+          "first MEDIA_CHECK after offline boot returns 0xFF so DOS calls BUILD_BPB");
+    vol_off = olnk_read_u16_le(&rh[15]);
+    vol_seg = olnk_read_u16_le(&rh[17]);
+    CHECK((vol_seg == drv_seg) &&
+              (memcmp(&g_sim_mem.ram[sim_lin(vol_seg, vol_off)], "NO NAME    ", 12U) == 0),
+          "RH MEDIA_CHECK 0xFF writes valid far pointer to previous volume label at rh+15");
+
+    /* 3. Cmd 0x02 BUILD_BPB -> returns far pointer to packed 25-byte live FAT16 BPB at rh+18 */
+    memset(rh, 0, 32U);
+    rh[0] = 22U;
+    rh[1] = 0U;
+    rh[2] = OLNK_DOS_CMD_BUILD_BPB;
+    rh[13] = 0xF8U;
+    st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+    CHECK((st == OLNK_DOS_STATUS_DONE) && (olnk_read_u16_le(&rh[3]) == OLNK_DOS_STATUS_DONE),
+          "RH Cmd 0x02 BUILD_BPB succeeds");
+    bpb_off = olnk_read_u16_le(&rh[18]);
+    bpb_seg = olnk_read_u16_le(&rh[20]);
+    {
+        olnk_dos_bpb_t live_bpb;
+        CHECK((bpb_seg == drv_seg) &&
+                  (olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_seg, bpb_off)], OLNK_LEN_DOS_BPB, &live_bpb) == OLNK_OK),
+              "RH BUILD_BPB far pointer at rh+18 decodes live packed BPB");
+        CHECK((live_bpb.bytes_per_sector == 512U) && (live_bpb.total_sectors_16 == SIM_DISK_SECTORS) &&
+                  (live_bpb.sectors_per_fat == 2U) && (live_bpb.media_descriptor == 0xF8U),
+              "RH BUILD_BPB live geometry matches remote FAT16 VBR");
+    }
+
+    /* 4. Subsequent MEDIA_CHECK unchanged -> swap volume -> changed + previous label */
+    memset(rh, 0, 32U);
+    rh[0] = 19U;
+    rh[1] = 0U;
+    rh[2] = OLNK_DOS_CMD_MEDIA_CHECK;
+    rh[13] = 0xF8U;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH MEDIA_CHECK steady-state succeeds");
+    CHECK(rh[14] == (uint8_t)OLNK_MEDIA_UNCHANGED, "RH MEDIA_CHECK reports 0x01 unchanged");
+
+    build_fat16_vbr(g_e2e_disk.sectors[0], SIM_DISK_SECTORS, 0xABCDEF01UL, "SWAPDISK   ");
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH MEDIA_CHECK after swap succeeds");
+    CHECK(rh[14] == (uint8_t)OLNK_MEDIA_CHANGED, "RH MEDIA_CHECK after swap reports 0xFF");
+    vol_off = olnk_read_u16_le(&rh[15]);
+    vol_seg = olnk_read_u16_le(&rh[17]);
+    CHECK(strcmp((const char *)&g_sim_mem.ram[sim_lin(vol_seg, vol_off)], "OPENLNKDOS") == 0,
+          "RH MEDIA_CHECK swap exposes previous volume label OPENLNKDOS");
+
+    /* 5. Cmds 0x0D OPEN, 0x0E CLOSE, 0x0F REMOVABLE_MEDIA, 0x17/0x18 LOGICAL, 0x19 IOCTL_QUERY */
+    memset(rh, 0, 32U);
+    rh[0] = 13U;
+    rh[1] = 0U;
+    rh[2] = OLNK_DOS_CMD_OPEN;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH Cmd 0x0D OPEN");
+    rh[2] = OLNK_DOS_CMD_CLOSE;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH Cmd 0x0E CLOSE");
+    rh[2] = OLNK_DOS_CMD_REMOVABLE_MEDIA;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH Cmd 0x0F REMOVABLE_MEDIA unit 0");
+    rh[1] = 7U;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT),
+          "RH Cmd 0x0F REMOVABLE_MEDIA invalid unit -> 0x8101");
+    rh[1] = 2U;
+    rh[2] = OLNK_DOS_CMD_GET_LOGICAL;
+    CHECK((olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+               OLNK_DOS_STATUS_DONE) &&
+              (rh[1] == 0U),
+          "RH Cmd 0x17 GET_LOGICAL writes 0 to rh+1");
+
+    memset(rh, 0, 32U);
+    rh[0] = 23U;
+    rh[1] = 0U;
+    rh[2] = OLNK_DOS_CMD_IOCTL_QUERY;
+    rh[13] = OLNK_IOCTL_CAT_DISK;
+    rh[14] = OLNK_IOCTL_FN_GET_MEDIA_ID;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_STATUS_DONE,
+          "RH Cmd 0x19 IOCTL_QUERY supports 08h/66h");
+    rh[14] = 0x99U;
+    CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+              OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_COMMAND),
+          "RH Cmd 0x19 IOCTL_QUERY rejects unsupported 08h/99h");
+
+    /* 6. Cmd 0x13 GENERIC_IOCTL 08h/66h (Get Media ID via far param block) */
+    memset(rh, 0, 32U);
+    rh[0] = 23U;
+    rh[1] = 0U;
+    rh[2] = OLNK_DOS_CMD_GENERIC_IOCTL;
+    rh[13] = OLNK_IOCTL_CAT_DISK;
+    rh[14] = OLNK_IOCTL_FN_GET_MEDIA_ID;
+    olnk_write_u16_le(&rh[19], 0x0200U);
+    olnk_write_u16_le(&rh[21], rh_seg);
+    memset(&g_sim_mem.ram[sim_lin(rh_seg, 0x0200U)], 0, OLNK_LEN_GENERIC_IOCTL_MID);
+    st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+    {
+        olnk_generic_ioctl_mid_t mid;
+        CHECK(st == OLNK_DOS_STATUS_DONE, "RH Cmd 0x13 IOCTL 08h/66h succeeds");
+        CHECK(olnk_decode_generic_ioctl_mid(
+                  &g_sim_mem.ram[sim_lin(rh_seg, 0x0200U)], OLNK_LEN_GENERIC_IOCTL_MID, &mid) ==
+                  OLNK_OK,
+              "RH IOCTL 08h/66h copied 25-byte MID to far param block");
+        CHECK((mid.serial_number == 0xABCDEF01UL) &&
+                  (memcmp(mid.volume_label, "SWAPDISK   ", 11U) == 0) &&
+                  (memcmp(mid.filesystem_type, "FAT16   ", 8U) == 0),
+              "RH IOCTL 08h/66h serial, label, and FAT16 type exact");
+
+        /* Also exercise Cmd 0x13 IOCTL 08h/46h (Set Media ID far param read & status writeback) */
+        rh[14] = OLNK_IOCTL_FN_SET_MEDIA_ID;
+        st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+        CHECK((st == OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_COMMAND)) &&
+                  (olnk_read_u16_le(&rh[3]) == st),
+              "RH Cmd 0x13 IOCTL 08h/46h marshals 25B MID & propagates server status");
+    }
+
+    /* 7. 16-bit LBA WRITE (0x08) + READ (0x04) of 2 sectors */
+    {
+        uint32_t tx_lin = sim_lin(0x0300U, 0x0000U);
+        uint32_t rx_lin = sim_lin(0x0380U, 0x0000U);
+        for (i = 0U; i < (2U * OLNK_SECTOR_SIZE); ++i) {
+            g_sim_mem.ram[tx_lin + i] = (uint8_t)((i * 13U + 5U) & 0xFFU);
+        }
+        memset(rh, 0, 32U);
+        rh[0] = 22U;
+        rh[1] = 0U;
+        rh[2] = OLNK_DOS_CMD_WRITE;
+        rh[13] = 0xF8U;
+        olnk_write_u16_le(&rh[14], 0x0000U);
+        olnk_write_u16_le(&rh[16], 0x0300U);
+        olnk_write_u16_le(&rh[18], 2U);
+        olnk_write_u16_le(&rh[20], 4U); /* 16-bit LBA = 4 */
+        CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+                  OLNK_DOS_STATUS_DONE,
+              "RH Cmd 0x08 16-bit LBA WRITE succeeds");
+        CHECK(olnk_read_u16_le(&rh[18]) == 2U, "RH WRITE reports 2 sectors transferred");
+
+        memset(&g_sim_mem.ram[rx_lin], 0, 2U * OLNK_SECTOR_SIZE);
+        rh[2] = OLNK_DOS_CMD_READ;
+        olnk_write_u16_le(&rh[14], 0x0000U);
+        olnk_write_u16_le(&rh[16], 0x0380U);
+        olnk_write_u16_le(&rh[18], 2U);
+        olnk_write_u16_le(&rh[20], 4U);
+        CHECK(olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io) ==
+                  OLNK_DOS_STATUS_DONE,
+              "RH Cmd 0x04 16-bit LBA READ succeeds");
+        CHECK((olnk_read_u16_le(&rh[18]) == 2U) &&
+                  (memcmp(&g_sim_mem.ram[tx_lin], &g_sim_mem.ram[rx_lin], 2U * OLNK_SECTOR_SIZE) == 0),
+              "RH 16-bit LBA WRITE->READ round-trip bit-for-bit identical");
+    }
+
+    /* 8. 32-bit LBA (rh+20==0xFFFF, rh+26) + 16 KiB multi-chunk (>4 KiB) + 64 KiB boundary wrap! */
+    {
+        /* Transfer buffer at 0x0000:0xF800 spans physical 0x0F800..0x137FF (crosses 0x10000!) */
+        const uint16_t tx_seg = 0x0000U;
+        const uint16_t tx_off = 0xF800U;
+        const uint16_t rx_seg = 0x0500U;
+        const uint16_t rx_off = 0xF800U; /* spans physical 0x14800..0x187FF */
+        uint32_t tx_lin = sim_lin(tx_seg, tx_off);
+        uint32_t rx_lin = sim_lin(rx_seg, rx_off);
+        uint32_t bytes16k = 32UL * (uint32_t)OLNK_SECTOR_SIZE;
+        bool sentinel_ok = true;
+
+        for (i = 0U; i < (size_t)bytes16k; ++i) {
+            g_sim_mem.ram[tx_lin + i] = (uint8_t)(((i * 41U) + 19U) ^ 0x5AU);
+        }
+        memset(&g_sim_mem.ram[rx_lin], 0, (size_t)bytes16k);
+
+        memset(rh, 0, 32U);
+        rh[0] = 30U;
+        rh[1] = 0U;
+        rh[2] = OLNK_DOS_CMD_WRITE_VERIFY;
+        rh[13] = 0xF8U;
+        olnk_write_u16_le(&rh[14], tx_off);
+        olnk_write_u16_le(&rh[16], tx_seg);
+        olnk_write_u16_le(&rh[18], 32U);     /* 32 sectors = 4x 4 KiB bounce chunks! */
+        olnk_write_u16_le(&rh[20], 0xFFFFU); /* 32-bit LBA indicator */
+        olnk_write_u32_le(&rh[26], 20UL);    /* 32-bit start LBA = 20 */
+        st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+        CHECK((st == OLNK_DOS_STATUS_DONE) && (olnk_read_u16_le(&rh[18]) == 32U),
+              "RH Cmd 0x09 32-bit LBA 16 KiB multi-chunk WRITE_VERIFY across 64 KiB boundary");
+
+        memset(rh, 0, 32U);
+        rh[0] = 30U;
+        rh[1] = 0U;
+        rh[2] = OLNK_DOS_CMD_READ;
+        rh[13] = 0xF8U;
+        olnk_write_u16_le(&rh[14], rx_off);
+        olnk_write_u16_le(&rh[16], rx_seg);
+        olnk_write_u16_le(&rh[18], 32U);
+        olnk_write_u16_le(&rh[20], 0xFFFFU);
+        olnk_write_u32_le(&rh[26], 20UL);
+        st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+        CHECK((st == OLNK_DOS_STATUS_DONE) && (olnk_read_u16_le(&rh[18]) == 32U),
+              "RH Cmd 0x04 32-bit LBA 16 KiB multi-chunk READ across 64 KiB boundary");
+        CHECK(memcmp(&g_sim_mem.ram[tx_lin], &g_sim_mem.ram[rx_lin], (size_t)bytes16k) == 0,
+              "RH 16 KiB 32-bit LBA WRITE_VERIFY->READ bit-for-bit identical across 64 KiB wrap");
+        CHECK(!g_sim_mem.wrap_violation, "zero 16-bit offset wraparound violations in far copies");
+
+        for (i = 0U; i < 4096U; ++i) {
+            if (g_sim_mem.ram[i] != 0xEEU) {
+                sentinel_ok = false;
+                break;
+            }
+        }
+        CHECK(sentinel_ok, "physical 0x0000:0000..0FFF sentinel untouched (no 64 KiB segment wrap)");
+    }
+
+    /* 9. Cmd 0x00 INIT while server is already online -> prefetches live BPB at boot */
+    olnk_server_drop_link(&g_srv);
+    memset(rh, 0, 32U);
+    rh[0] = 23U;
+    rh[2] = OLNK_DOS_CMD_INIT;
+    olnk_write_u16_le(&rh[18], 0x0020U);
+    olnk_write_u16_le(&rh[20], rh_seg);
+    rh[22] = 3U;
+    st = olnk_dos_sys_handle_rh(rh_seg, rh_off, drv_seg, resident_end, &mem_ops, &cli_io);
+    CHECK((st == OLNK_DOS_STATUS_DONE) && (rh[13] == 1U) && (g_sim_mem.header_units == 1U),
+          "RH INIT while online maps exact 1 live server unit");
+    bpb_arr_off = olnk_read_u16_le(&rh[18]);
+    bpb_arr_seg = olnk_read_u16_le(&rh[20]);
+    {
+        uint16_t entry0 = olnk_read_u16_le(&g_sim_mem.ram[sim_lin(bpb_arr_seg, bpb_arr_off)]);
+        olnk_dos_bpb_t boot_bpb;
+        CHECK(olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_arr_seg, entry0)], OLNK_LEN_DOS_BPB, &boot_bpb) == OLNK_OK,
+              "RH INIT online BPB array entry 0 decodes");
+        CHECK((boot_bpb.bytes_per_sector == 512U) && (boot_bpb.total_sectors_16 == SIM_DISK_SECTORS),
+              "RH INIT online prefetched live remote FAT16 BPB");
+    }
+    CHECK((strstr(g_sim_mem.init_banner, "(D:)") != NULL) &&
+              (strstr(g_sim_mem.init_banner, "[connected]") != NULL),
+          "RH INIT online boot banner reports (D:) [connected]");
+}
+
 int main(void) {
     test_uart_register_programming_and_fifo_detect();
     test_dos_disk_hal_int25_26();
     test_openlnk_sys_over_simulated_16550a_uart();
+    test_openlnk_sys_config_parser();
+    test_openlnk_sys_rh_marshalling_over_16550a();
 
     printf("[test_dos_hal] PASSED=%d FAILED=%d\n", g_pass, g_fail);
     return (g_fail == 0) ? 0 : 1;

@@ -1,9 +1,9 @@
 # cleanroom/dos/Makefile.watcom
 # Cross-compile libopenlnk 16-bit Real-Mode MS-DOS targets (8.3 compliant)
 # using Open Watcom v2:
-#   - OPENSVR.EXE          (16-bit DOS server with 8250/16550A + INT 25h/26h HAL)
-#   - OPENLNK.EXE          (16-bit DOS client CLI with 8250/16550A HAL)
-#   - openlnk_sys_stub.obj (OPENLNK.SYS DOS block device driver core object)
+#   - OPENSVR.EXE  (16-bit DOS server with 8250/16550A + INT 25h/26h HAL)
+#   - OPENLNK.EXE  (16-bit DOS client CLI with 8250/16550A HAL)
+#   - OPENLNK.SYS  (16-bit Real-Mode MS-DOS Block Device Driver, zero-CRT, <= 64 KiB)
 #
 # Expected environment:
 #   WATCOM=/opt/watcom
@@ -11,6 +11,7 @@
 #   INCLUDE=$WATCOM/h
 
 CC      = wcc
+AS      = wasm
 WLINK   = wlink
 WLIB    = wlib
 
@@ -20,7 +21,9 @@ WLIB    = wlib
 # -wx   : Maximum warning level
 # -we   : Treat warnings as errors
 # -os   : Optimize for size
-CFLAGS  = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
+CFLAGS     = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
+SYS_CFLAGS = $(CFLAGS) -zl -s
+ASFLAGS    = -0 -ms -wx -we -q
 
 BUILD_DIR = build
 
@@ -36,7 +39,17 @@ DOS_HAL_OBJS = \
 	$(BUILD_DIR)/dos_hal_uart.obj \
 	$(BUILD_DIR)/dos_hal_disk.obj
 
-all: $(BUILD_DIR) $(BUILD_DIR)/OPENSVR.EXE $(BUILD_DIR)/OPENLNK.EXE $(BUILD_DIR)/openlnk_sys_stub.obj
+SYS_OBJS = \
+	$(BUILD_DIR)/openlnk_sys_entry.obj \
+	$(BUILD_DIR)/sys_openlnk_sys_stub.obj \
+	$(BUILD_DIR)/sys_dos_sys_rt.obj \
+	$(BUILD_DIR)/sys_dos_hal_uart.obj \
+	$(BUILD_DIR)/sys_openlnk.obj \
+	$(BUILD_DIR)/sys_client.obj \
+	$(BUILD_DIR)/sys_protocol.obj \
+	$(BUILD_DIR)/sys_crc16.obj
+
+all: $(BUILD_DIR) $(BUILD_DIR)/OPENSVR.EXE $(BUILD_DIR)/OPENLNK.EXE $(BUILD_DIR)/OPENLNK.SYS
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -74,14 +87,39 @@ $(BUILD_DIR)/opensvr_main.obj: opensvr_main.c dos_hal_uart.h dos_hal_disk.h
 $(BUILD_DIR)/openlnk_main.obj: openlnk_main.c dos_hal_uart.h
 	$(CC) $(CFLAGS) -fo=$@ openlnk_main.c
 
-$(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h
-	$(CC) $(CFLAGS) -zl -s -fo=$@ openlnk_sys_stub.c
-
 $(BUILD_DIR)/OPENSVR.EXE: $(BUILD_DIR)/opensvr_main.obj $(DOS_HAL_OBJS) $(BUILD_DIR)/libolnk.lib
 	$(WLINK) system dos option quiet option stack=4096 name $@ file $(BUILD_DIR)/opensvr_main.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/dos_hal_disk.obj library $(BUILD_DIR)/libolnk.lib
 
 $(BUILD_DIR)/OPENLNK.EXE: $(BUILD_DIR)/openlnk_main.obj $(BUILD_DIR)/dos_hal_uart.obj $(BUILD_DIR)/libolnk.lib
 	$(WLINK) system dos option quiet option stack=4096 name $@ file $(BUILD_DIR)/openlnk_main.obj file $(BUILD_DIR)/dos_hal_uart.obj library $(BUILD_DIR)/libolnk.lib
+
+# Freestanding Zero-CRT OPENLNK.SYS Block Device Driver objects (-zl -s)
+$(BUILD_DIR)/openlnk_sys_entry.obj: openlnk_sys_entry.asm
+	$(AS) $(ASFLAGS) -fo=$@ openlnk_sys_entry.asm
+
+$(BUILD_DIR)/sys_openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h
+	$(CC) $(SYS_CFLAGS) -fo=$@ openlnk_sys_stub.c
+
+$(BUILD_DIR)/sys_dos_sys_rt.obj: dos_sys_rt.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ dos_sys_rt.c
+
+$(BUILD_DIR)/sys_dos_hal_uart.obj: dos_hal_uart.c dos_hal_uart.h
+	$(CC) $(SYS_CFLAGS) -fo=$@ dos_hal_uart.c
+
+$(BUILD_DIR)/sys_openlnk.obj: ../src/openlnk.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/openlnk.c
+
+$(BUILD_DIR)/sys_client.obj: ../src/client.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/client.c
+
+$(BUILD_DIR)/sys_protocol.obj: ../src/protocol.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/protocol.c
+
+$(BUILD_DIR)/sys_crc16.obj: ../src/crc16.c
+	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/crc16.c
+
+$(BUILD_DIR)/OPENLNK.SYS: $(SYS_OBJS)
+	$(WLINK) format raw bin option quiet option nodefaultlibs option map=$(BUILD_DIR)/OPENLNK.MAP order clname CODE clname DATA clname BSS clname BSSEND clname STACK name $@ file $(BUILD_DIR)/openlnk_sys_entry.obj file $(BUILD_DIR)/sys_openlnk_sys_stub.obj file $(BUILD_DIR)/sys_dos_sys_rt.obj file $(BUILD_DIR)/sys_dos_hal_uart.obj file $(BUILD_DIR)/sys_openlnk.obj file $(BUILD_DIR)/sys_client.obj file $(BUILD_DIR)/sys_protocol.obj file $(BUILD_DIR)/sys_crc16.obj
 
 clean:
 	rm -rf $(BUILD_DIR)

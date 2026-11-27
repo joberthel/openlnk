@@ -109,7 +109,7 @@ jobs:
           curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/ow-snapshot.tar.xz" \
             | sudo tar -xJf - -C /opt/watcom
 
-      - name: Cross-compile 16-bit DOS OPENSVR.EXE, OPENLNK.EXE & OPENLNK.SYS driver object
+      - name: Cross-compile 16-bit DOS OPENSVR.EXE, OPENLNK.EXE & OPENLNK.SYS
         env:
           WATCOM: /opt/watcom
           INCLUDE: /opt/watcom/h
@@ -118,8 +118,25 @@ jobs:
           make -C cleanroom/dos -f Makefile.watcom
           test -f cleanroom/dos/build/OPENSVR.EXE
           test -f cleanroom/dos/build/OPENLNK.EXE
-          test -f cleanroom/dos/build/openlnk_sys_stub.obj
-          python3 -c "for bin_path in ('cleanroom/dos/build/OPENSVR.EXE', 'cleanroom/dos/build/OPENLNK.EXE'): data=open(bin_path,'rb').read(2); assert data==b'MZ', f'Expected DOS MZ header in {bin_path}, got {data!r}'; print(f'Verified DOS MZ header: {bin_path}')"
+          test -f cleanroom/dos/build/OPENLNK.SYS
+          test -f cleanroom/dos/build/OPENLNK.MAP
+          python3 -c "
+          import struct
+          for bin_path in ('cleanroom/dos/build/OPENSVR.EXE', 'cleanroom/dos/build/OPENLNK.EXE'):
+              data = open(bin_path, 'rb').read(2)
+              assert data == b'MZ', f'Expected DOS MZ header in {bin_path}, got {data!r}'
+              print(f'Verified DOS MZ header: {bin_path}')
+          sys_data = open('cleanroom/dos/build/OPENLNK.SYS', 'rb').read()
+          assert len(sys_data) >= 18 and len(sys_data) < 65535, f'Invalid OPENLNK.SYS size: {len(sys_data)}'
+          nxt, attr, strat, intr, units = struct.unpack_from('<IHHHB', sys_data, 0)
+          sig = sys_data[11:18]
+          assert nxt == 0xFFFFFFFF, f'Expected FF FF FF FF header, got 0x{nxt:08X}'
+          assert attr == 0x2842, f'Expected attr 0x2842, got 0x{attr:04X}'
+          assert 0x0012 <= strat < len(sys_data), f'Invalid Strategy offset 0x{strat:04X}'
+          assert 0x0012 <= intr < len(sys_data), f'Invalid Interrupt offset 0x{intr:04X}'
+          assert sig == b'OPENLNK', f'Invalid driver signature {sig!r}'
+          print(f'Verified OPENLNK.SYS: {len(sys_data)} B, attr=0x{attr:04X}, strat=0x{strat:04X}, intr=0x{intr:04X}, sig={sig!r}')
+          "
 
       - name: Upload 16-bit DOS build artifacts
         uses: actions/upload-artifact@v4
@@ -128,7 +145,8 @@ jobs:
           path: |
             cleanroom/dos/build/OPENSVR.EXE
             cleanroom/dos/build/OPENLNK.EXE
-            cleanroom/dos/build/openlnk_sys_stub.obj
+            cleanroom/dos/build/OPENLNK.SYS
+            cleanroom/dos/build/OPENLNK.MAP
 
   kaitai-and-vectors:
     name: Kaitai Struct & Differential Test Vectors
