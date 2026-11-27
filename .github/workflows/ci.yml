@@ -207,18 +207,22 @@ jobs:
           - target: esp32c3
             build_img_mode: false
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_MAXSIZE: 256M
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure container ccache paths
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.ccache"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
       - name: Cache ESP-IDF ccache (${{ matrix.target }})
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: esp-idf-5.3.2-${{ matrix.target }}-${{ hashFiles('esp32/CMakeLists.txt', 'esp32/examples/sd_server_idf/**') }}
+          key: esp-idf-5.3.2-${{ matrix.target }}-${{ hashFiles('esp32/CMakeLists.txt', 'esp32/examples/sd_server_idf/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/Kconfig.projbuild') }}
           restore-keys: |
             esp-idf-5.3.2-${{ matrix.target }}-
 
