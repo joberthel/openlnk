@@ -5,6 +5,7 @@
  *
  * Strictly ISO C99, zero dynamic memory allocation, zero floating-point.
  */
+#include "openlnk/client.h"
 #include "openlnk/crc16.h"
 #include "openlnk/openlnk.h"
 #include "openlnk/protocol.h"
@@ -798,6 +799,120 @@ static void test_storage_helpers(void) {
     EXPECT_TRUE(strcmp(size_str, "(1440Kb)") == 0);
 }
 
+/* =========================================================================
+ * Test 8: High-Level olnk_client_* Engine End-to-End Against olnk_server_t
+ * ========================================================================= */
+
+static void test_high_level_client_rpc_engine(void) {
+    static olnk_server_t srv;
+    static olnk_client_t cli;
+    static lb_bus_t bus;
+    static uint8_t disk[OLNK_SECTOR_SIZE * 48U];
+    static uint8_t tx_buf[OLNK_SECTOR_SIZE * 24U]; /* 12 KiB (> 8192 B multi-fragment!) */
+    static uint8_t rx_buf[OLNK_SECTOR_SIZE * 24U];
+
+    olnk_mem_drive_t drv;
+    olnk_transport_t srv_tr;
+    olnk_transport_t cli_tr;
+    olnk_session_sync_resp_t sresp;
+    olnk_map_config_resp_t mresp;
+    olnk_get_drive_info_resp_t gresp;
+    olnk_media_check_resp_t mcresp;
+    olnk_build_bpb_resp_t bresp;
+    olnk_sector_io_resp_t ior;
+    olnk_generic_ioctl_mid_t mid;
+    uint16_t dos_st = 0U;
+    size_t i;
+
+    memset(disk, 0, sizeof(disk));
+    olnk_fat_build_synthetic_vbr(disk, 48UL, 0xF8U, "CLIENT_API", 0xCAFE1234UL);
+    olnk_mem_drive_init(&drv, disk, 48UL);
+
+    memset(&bus, 0, sizeof(bus));
+    bus.srv = &srv;
+    bus.cli_baud = 9600UL;
+    bus.srv_baud = 9600UL;
+
+    memset(&srv_tr, 0, sizeof(srv_tr));
+    srv_tr.write = lb_srv_write;
+    srv_tr.set_baud = lb_srv_set_baud;
+    srv_tr.user_data = &bus;
+
+    memset(&cli_tr, 0, sizeof(cli_tr));
+    cli_tr.read = lb_cli_read;
+    cli_tr.write = lb_cli_write;
+    cli_tr.set_baud = lb_cli_set_baud;
+    cli_tr.user_data = &bus;
+
+    EXPECT_EQ_U32(olnk_server_init(&srv, srv_tr, olnk_mem_drive_ops(&drv)), OLNK_OK);
+    EXPECT_EQ_U32(olnk_client_init(&cli, cli_tr), OLNK_OK);
+
+    /* Phase A + B connect */
+    EXPECT_EQ_U32(olnk_client_connect(&cli, 3U), OLNK_OK);
+    EXPECT_EQ_U32(bus.cli_baud, 115200UL);
+    EXPECT_EQ_U32(bus.srv_baud, 115200UL);
+
+    /* Session sync & Map config */
+    EXPECT_EQ_U32(olnk_client_session_sync(&cli, false, &sresp), OLNK_OK);
+    EXPECT_EQ_U32(sresp.ready_flag, 1U);
+    EXPECT_TRUE(!cli.link.session_resumed);
+
+    EXPECT_EQ_U32(olnk_client_map_config(&cli, 4U, 3U, &mresp), OLNK_OK);
+    EXPECT_EQ_U32(mresp.server_drive_count, 1U);
+    EXPECT_EQ_U32(mresp.drive_map_resp[0], 0U);
+    EXPECT_TRUE(olnk_client_unit_supports_lba32(&cli, 0U));
+
+    /* Drive info, Media Check, Build BPB */
+    EXPECT_EQ_U32(olnk_client_get_drive_info(&cli, 0U, &gresp), OLNK_OK);
+    EXPECT_TRUE(strcmp(gresp.volume_label, "CLIENT_API") == 0);
+    EXPECT_EQ_U32(olnk_client_media_check(&cli, 0U, 0xF8U, &mcresp), OLNK_OK);
+    EXPECT_EQ_U32(mcresp.media_status, OLNK_MEDIA_UNCHANGED);
+    EXPECT_EQ_U32(olnk_client_build_bpb(&cli, 0U, 0xF8U, &bresp), OLNK_OK);
+    EXPECT_TRUE(bresp.has_bpb);
+    EXPECT_EQ_U32(bresp.bpb.total_sectors_16, 48U);
+
+    /* Open/Close + One-way Drive Incompat */
+    EXPECT_EQ_U32(olnk_client_blk_ctrl(&cli, OLNK_OP_BLK_DEVICE_OPEN, 0U, &dos_st), OLNK_OK);
+    EXPECT_EQ_U32(dos_st, OLNK_DOS_STATUS_DONE);
+    EXPECT_EQ_U32(olnk_client_drive_incompat(&cli, 1U, 5U), OLNK_OK);
+    EXPECT_EQ_U32(olnk_client_blk_ctrl(&cli, OLNK_OP_BLK_DEVICE_CLOSE, 0U, &dos_st), OLNK_OK);
+    EXPECT_EQ_U32(dos_st, OLNK_DOS_STATUS_DONE);
+
+    /* Generic IOCTL Get/Set Media ID */
+    EXPECT_EQ_U32(olnk_client_get_media_id(&cli, 0U, &dos_st, &mid), OLNK_OK);
+    EXPECT_EQ_U32(dos_st, OLNK_DOS_STATUS_DONE);
+    EXPECT_EQ_U32(mid.serial_number, 0xCAFE1234UL);
+    mid.serial_number = 0x13572468UL;
+    EXPECT_EQ_U32(olnk_client_set_media_id(&cli, 0U, &mid, &dos_st), OLNK_OK);
+    EXPECT_EQ_U32(dos_st, OLNK_DOS_STATUS_DONE);
+    EXPECT_EQ_U32(olnk_client_get_media_id(&cli, 0U, &dos_st, &mid), OLNK_OK);
+    EXPECT_EQ_U32(mid.serial_number, 0x13572468UL);
+
+    /* Multi-fragment 12 KiB Write + Read */
+    for (i = 0U; i < sizeof(tx_buf); ++i) {
+        tx_buf[i] = (uint8_t)((i * 41U + 3U) & 0xFFU);
+    }
+    EXPECT_EQ_U32(olnk_client_write_sectors(&cli, 0U, 0xF8U, 8UL, 24U, 512U, tx_buf, false, &ior), OLNK_OK);
+    EXPECT_EQ_U32(ior.sectors_transferred, 24U);
+    EXPECT_EQ_U32(olnk_client_read_sectors(&cli, 0U, 0xF8U, 8UL, 24U, 512U, rx_buf, (uint32_t)sizeof(rx_buf), &ior), OLNK_OK);
+    EXPECT_EQ_U32(ior.sectors_transferred, 24U);
+    EXPECT_TRUE(memcmp(tx_buf, rx_buf, sizeof(tx_buf)) == 0);
+
+    /* Write-Protect returns DOS 0x8100 cleanly without losing sync */
+    drv.write_protected = true;
+    EXPECT_EQ_U32(olnk_client_write_sectors(&cli, 0U, 0xF8U, 1UL, 1U, 512U, tx_buf, false, &ior), OLNK_OK);
+    EXPECT_EQ_U32(ior.status, OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_WRITE_PROTECT));
+    EXPECT_EQ_U32(ior.sectors_transferred, 0U);
+
+    /* Keepalive + Disconnect + Session Resumption */
+    EXPECT_EQ_U32(olnk_client_keepalive(&cli), OLNK_OK);
+    olnk_client_disconnect(&cli);
+    olnk_server_drop_link(&srv);
+    EXPECT_EQ_U32(olnk_client_connect(&cli, 2U), OLNK_OK);
+    EXPECT_EQ_U32(olnk_client_session_sync(&cli, false, &sresp), OLNK_OK);
+    EXPECT_TRUE(cli.link.session_resumed);
+}
+
 int main(void) {
     test_crc16_genibus_and_residue();
     test_protocol_tokens_and_wire_framing();
@@ -806,6 +921,7 @@ int main(void) {
     test_echo_vs_burst_and_error_recovery();
     test_end_to_end_rpc_and_session_resumption();
     test_storage_helpers();
+    test_high_level_client_rpc_engine();
 
     if (g_failures == 0) {
         printf("All libopenlnk C99 MS-DOS 6.22 protocol tests PASSED.\n");
