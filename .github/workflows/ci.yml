@@ -109,6 +109,18 @@ jobs:
           ./cleanroom/build-asan/opensvr --self-test
           ./cleanroom/build-asan/openlnk --self-test
 
+      - name: Verify standalone ESP32 Arduino/PlatformIO bundle (strict C99)
+        if: matrix.os == 'ubuntu-latest' && matrix.compiler == 'gcc'
+        run: |
+          TMP_VERIFY="$(mktemp -d)"
+          trap 'rm -rf "$TMP_VERIFY"' EXIT
+          python3 esp32/tools/make_arduino_bundle.py --out "${TMP_VERIFY}/openlnk-arduino-esp32.zip"
+          python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            "${TMP_VERIFY}/openlnk-arduino-esp32.zip" "${TMP_VERIFY}"
+          gcc -std=c99 -Wall -Wextra -Werror -pedantic -Wconversion -Wshadow -Wstrict-prototypes \
+            -I"${TMP_VERIFY}/openlnk/src" -fsyntax-only \
+            "${TMP_VERIFY}/openlnk/src/"*.c "${TMP_VERIFY}/openlnk/src/openlnk_core/"*.c
+
   dos-16bit-watcom:
     name: MS-DOS 16-Bit Real-Mode (Open Watcom v2)
     runs-on: ubuntu-latest

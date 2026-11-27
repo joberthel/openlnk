@@ -685,11 +685,11 @@ static olnk_status_t send_frame_once(
         uint32_t ack_wait_ms = ctx->tx_timeout_ms;
         if (!echo_mode) {
             uint32_t bps = olnk_baud_index_to_bps(ctx->current_baud_idx);
-            uint32_t wire_bytes = (uint32_t)len_sz + (uint32_t)payload_len + 2UL;
-            if (bps == 0UL) {
-                bps = 9600UL;
+            uint32_t wire_bytes = (uint32_t)len_sz + (uint32_t)payload_len + UINT32_C(2);
+            if (bps == UINT32_C(0)) {
+                bps = UINT32_C(9600);
             }
-            ack_wait_ms += (wire_bytes * 12000UL) / bps;
+            ack_wait_ms += (wire_bytes * UINT32_C(12000)) / bps;
         }
         st = hal_read_byte(ctx, &final_ack, ack_wait_ms);
     }

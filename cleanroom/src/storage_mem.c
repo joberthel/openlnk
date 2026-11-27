@@ -183,8 +183,8 @@ bool olnk_fat_parse_vbr(const uint8_t *vbr_sector, olnk_drive_info_t *out_info) 
         memcpy(out_info->filesystem_type, &vbr_sector[54], 8U);
         out_info->filesystem_type[8] = '\0';
     } else {
-        uint32_t root_sec = ((uint32_t)bpb.root_entries * 32UL +
-                             (uint32_t)bpb.bytes_per_sector - 1UL) /
+        uint32_t root_sec = ((uint32_t)bpb.root_entries * UINT32_C(32) +
+                             (uint32_t)bpb.bytes_per_sector - UINT32_C(1)) /
                             (uint32_t)bpb.bytes_per_sector;
         uint32_t data_start = (uint32_t)bpb.reserved_sectors +
                               (uint32_t)bpb.num_fats * (uint32_t)bpb.sectors_per_fat +

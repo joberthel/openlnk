@@ -49,7 +49,7 @@ uint32_t olnk_esp32_ms_to_ticks(uint32_t timeout_ms, uint32_t tick_period_ms) {
 #endif
     }
 
-    add = period - 1UL;
+    add = period - UINT32_C(1);
     if (timeout_ms > (UINT32_MAX - add)) {
         return (UINT32_MAX / period);
     }

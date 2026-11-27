@@ -117,11 +117,11 @@ static void srv_start_tx_frame(
 
 static uint32_t srv_burst_wire_ms(const olnk_server_t *srv) {
     uint32_t bps = olnk_baud_index_to_bps(srv->link.current_baud_idx);
-    if (bps == 0UL) {
-        bps = 9600UL;
+    if (bps == UINT32_C(0)) {
+        bps = UINT32_C(9600);
     }
     /* 12 bits/byte safety margin (10 wire bits + USB-serial / FIFO jitter) */
-    return ((uint32_t)srv->tx_stream_total * 12000UL) / bps;
+    return ((uint32_t)srv->tx_stream_total * UINT32_C(12000)) / bps;
 }
 
 static void srv_retry_tx_frame(olnk_server_t *srv) {
