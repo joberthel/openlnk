@@ -94,6 +94,21 @@ jobs:
             ./cleanroom/build/Release/openlnk.exe --self-test
           fi
 
+      - name: Run AddressSanitizer & UndefinedBehaviorSanitizer tests
+        if: matrix.os == 'ubuntu-latest' && matrix.compiler == 'clang'
+        env:
+          CC: clang
+          ASAN_OPTIONS: detect_stack_use_after_return=1:strict_string_checks=1:check_initialization_order=1:strict_init_order=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cmake -S cleanroom -B cleanroom/build-asan \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          cmake --build cleanroom/build-asan
+          ctest --test-dir cleanroom/build-asan --output-on-failure
+          ./cleanroom/build-asan/opensvr --self-test
+          ./cleanroom/build-asan/openlnk --self-test
+
   dos-16bit-watcom:
     name: MS-DOS 16-Bit Real-Mode (Open Watcom v2)
     runs-on: ubuntu-latest
