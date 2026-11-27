@@ -137,14 +137,33 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
 
 #if defined(__WATCOMC__) && defined(__DOS__)
     olnk_dos_puts("Press ESC or Q to exit.\n");
-    for (;;) {
-        if (olnk_dos_kbhit()) {
-            uint8_t ch = olnk_dos_getch();
-            if ((ch == 27U) || (ch == (uint8_t)'q') || (ch == (uint8_t)'Q') || (ch == 3U)) {
-                break;
+    {
+        uint32_t last_tick = olnk_dos_get_ticks(&g_dos_uart);
+        for (;;) {
+            uint8_t rx_buf[64];
+            int n;
+            uint32_t now_tick;
+
+            if (olnk_dos_kbhit()) {
+                uint8_t ch = olnk_dos_getch();
+                if ((ch == 27U) || (ch == (uint8_t)'q') || (ch == (uint8_t)'Q') || (ch == 3U)) {
+                    break;
+                }
+            }
+
+            n = g_dos_server.link.transport.read(
+                rx_buf, sizeof(rx_buf), 0U, g_dos_server.link.transport.user_data);
+            if (n > 0) {
+                olnk_server_feed_bytes(&g_dos_server, rx_buf, (size_t)n);
+                last_tick = olnk_dos_get_ticks(&g_dos_uart);
+            } else {
+                now_tick = olnk_dos_get_ticks(&g_dos_uart);
+                if (now_tick != last_tick) {
+                    last_tick = now_tick;
+                    olnk_server_tick(&g_dos_server, OLNK_BIOS_TICK_MS);
+                }
             }
         }
-        (void)olnk_server_poll(&g_dos_server, 55U);
     }
     olnk_dos_puts("OPENSVR stopped (rpcs=");
     olnk_dos_put_u32(g_dos_server.rpc_count);

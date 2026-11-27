@@ -1286,6 +1286,16 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
                 srv->state_elapsed_ms = 0UL;
                 break;
             }
+            if ((srv->link.current_baud_idx > (uint8_t)OLNK_BAUD_9600) &&
+                (srv->req_phase == (uint8_t)OLNK_REQ_PHASE_CMD) &&
+                (srv->idle_garbage_count > 0U)) {
+                /* Continued mismatched-baud probes (e.g. 9600 bps 0xAA on 115200 UART) */
+                srv->idle_garbage_count += 1U;
+                if (srv->idle_garbage_count >= 4U) {
+                    olnk_server_drop_link(srv);
+                    break;
+                }
+            }
             srv->state_elapsed_ms = 0UL;
             break;
 

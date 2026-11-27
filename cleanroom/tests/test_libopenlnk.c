@@ -970,6 +970,17 @@ static void test_serial_burst_wire_timeout_and_resync_recovery(void) {
     olnk_server_tick(&srv, 150UL);
     olnk_server_feed_bytes(&srv, &aa, 1U);
     EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_55);
+
+    /* 4. High-baud (115200) mismatched 9600 bps 0xAA noise bursts in RX_ERROR_DRAIN drop to 9600 */
+    olnk_server_drop_link(&srv);
+    olnk_server_feed_bytes(&srv, sync_seq, 3U);
+    srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_115200;
+    {
+        uint8_t noise[4] = { 0xF8U, 0x00U, 0xF8U, 0x00U };
+        olnk_server_feed_bytes(&srv, noise, sizeof(noise));
+        EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_AA);
+        EXPECT_EQ_U32(srv.link.current_baud_idx, (uint32_t)OLNK_BAUD_9600);
+    }
 }
 
 int main(void) {
