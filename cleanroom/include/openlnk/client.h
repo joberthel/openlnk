@@ -25,9 +25,13 @@ extern "C" {
 #define OLNK_CLIENT_DEFAULT_RESP_MS  5000U        /* Wait for server RPC execution */
 #define OLNK_CLIENT_SYNC_POLL_MS     275U         /* 5 BIOS ticks per sync attempt */
 
+#ifndef OLNK_CLIENT_CTRL_BUF_SIZE
+#define OLNK_CLIENT_CTRL_BUF_SIZE    256U
+#endif
+
 typedef struct {
     olnk_ctx_t link;
-    uint8_t ctrl_buf[256];
+    uint8_t ctrl_buf[OLNK_CLIENT_CTRL_BUF_SIZE];
 
     /* Last negotiated drive & printer mapping from opcode 0x01 */
     olnk_map_config_resp_t map;

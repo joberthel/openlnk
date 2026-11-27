@@ -66,14 +66,55 @@ static bool hal_set_baud_idx(olnk_ctx_t *ctx, uint8_t baud_idx) {
 
 static void hal_silent_drain(olnk_ctx_t *ctx, uint32_t silence_ms) {
     uint8_t discard;
-    uint32_t guard = 0UL;
-    while (guard < 16384UL) {
+    uint16_t guard = 0U;
+    while (guard < 16384U) {
         olnk_status_t st = hal_read_byte(ctx, &discard, silence_ms);
         if (st != OLNK_OK) {
             break;
         }
-        guard += 1UL;
+        guard = (uint16_t)(guard + 1U);
     }
+}
+
+static olnk_status_t hal_write_echo(
+    olnk_ctx_t *ctx,
+    const uint8_t *buf,
+    size_t len
+) {
+    size_t i;
+    for (i = 0U; i < len; ++i) {
+        uint8_t echoed = 0U;
+        olnk_status_t st = hal_write_byte(ctx, buf[i], ctx->tx_timeout_ms);
+        if (st != OLNK_OK) {
+            return st;
+        }
+        st = hal_read_byte(ctx, &echoed, ctx->tx_timeout_ms);
+        if ((st != OLNK_OK) || (echoed != buf[i])) {
+            return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+        }
+    }
+    return OLNK_OK;
+}
+
+static olnk_status_t hal_recv_crc_byte(
+    olnk_ctx_t *ctx,
+    uint8_t *out_byte,
+    uint16_t *crc,
+    bool echo
+) {
+    olnk_status_t st = hal_read_byte(ctx, out_byte, ctx->rx_byte_timeout_ms);
+    if (st != OLNK_OK) {
+        ctx->frames_rx_err += 1U;
+        return st;
+    }
+    *crc = olnk_crc16_update(*crc, *out_byte);
+    if (echo) {
+        st = hal_write_byte(ctx, *out_byte, ctx->tx_timeout_ms);
+        if (st != OLNK_OK) {
+            return st;
+        }
+    }
+    return OLNK_OK;
 }
 
 /* =========================================================================
@@ -319,7 +360,6 @@ olnk_status_t olnk_link_negotiate_baud_initiator(
     uint8_t target_baud_idx
 ) {
     uint8_t prev_baud_idx;
-    uint8_t req_byte;
     uint8_t rx_byte = 0U;
     uint8_t beacon;
     uint8_t inv_beacon;
@@ -332,10 +372,9 @@ olnk_status_t olnk_link_negotiate_baud_initiator(
     }
 
     prev_baud_idx = ctx->current_baud_idx;
-    req_byte = olnk_baud_req_byte(ctx->seq);
 
     /* 1. Send baud-change request (~seq) and wait for seq ACK */
-    st = hal_write_byte(ctx, req_byte, ctx->tx_timeout_ms);
+    st = hal_write_byte(ctx, olnk_baud_req_byte(ctx->seq), ctx->tx_timeout_ms);
     if (st != OLNK_OK) {
         return st;
     }
@@ -350,8 +389,8 @@ olnk_status_t olnk_link_negotiate_baud_initiator(
         return st;
     }
     if (!hal_set_baud_idx(ctx, target_baud_idx)) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return OLNK_ERR_HAL_IO;
+        st = OLNK_ERR_HAL_IO;
+        goto revert;
     }
 
     /* 3. Lock onto responder beacon at new baud rate */
@@ -361,62 +400,60 @@ olnk_status_t olnk_link_negotiate_baud_initiator(
     st = OLNK_ERR_HAL_TIMEOUT;
     for (tries = 0U; tries < 8U; ++tries) {
         st = hal_read_byte(ctx, &rx_byte, ctx->tx_timeout_ms);
-        if (st != OLNK_OK) {
-            break;
-        }
-        if (rx_byte == beacon) {
+        if ((st != OLNK_OK) || (rx_byte == beacon)) {
             break;
         }
     }
     if ((st != OLNK_OK) || (rx_byte != beacon)) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return OLNK_ERR_HAL_TIMEOUT;
+        st = OLNK_ERR_HAL_TIMEOUT;
+        goto revert;
     }
 
     /* Echo beacon back to responder */
     st = hal_write_byte(ctx, beacon, ctx->tx_timeout_ms);
     if (st != OLNK_OK) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return st;
+        goto revert;
     }
 
     /* Wait for ~beacon (tolerate any duplicate in-flight beacon) */
     for (tries = 0U; tries < 6U; ++tries) {
         st = hal_read_byte(ctx, &rx_byte, ctx->tx_timeout_ms);
         if (st != OLNK_OK) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return st;
+            goto revert;
         }
         if (rx_byte == inv_beacon) {
             break;
         }
         if (rx_byte != beacon) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return OLNK_ERR_PROTOCOL;
+            st = OLNK_ERR_PROTOCOL;
+            goto revert;
         }
     }
     if (rx_byte != inv_beacon) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return OLNK_ERR_HAL_TIMEOUT;
+        st = OLNK_ERR_HAL_TIMEOUT;
+        goto revert;
     }
 
     /* 4. 15-pair bidirectional line quality test */
     for (k = 0U; k < OLNK_BAUD_TEST_LEN; ++k) {
         st = hal_write_byte(ctx, olnk_baud_test_tx[k], ctx->tx_timeout_ms);
         if (st != OLNK_OK) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return st;
+            goto revert;
         }
         st = hal_read_byte(ctx, &rx_byte, ctx->tx_timeout_ms);
         if ((st != OLNK_OK) || (rx_byte != olnk_baud_test_rx[k])) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+            st = (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+            goto revert;
         }
     }
 
     ctx->current_baud_idx = target_baud_idx;
     ctx->baud_switches += 1U;
     return OLNK_OK;
+
+revert:
+    (void)hal_set_baud_idx(ctx, prev_baud_idx);
+    return st;
 }
 
 olnk_status_t olnk_link_handle_baud_responder(olnk_ctx_t *ctx) {
@@ -453,8 +490,8 @@ olnk_status_t olnk_link_handle_baud_responder(olnk_ctx_t *ctx) {
 
     /* Switch own UART */
     if (!hal_set_baud_idx(ctx, target_baud_idx)) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return OLNK_ERR_HAL_IO;
+        st = OLNK_ERR_HAL_IO;
+        goto revert;
     }
 
     /* 3. Transmit beacon up to 5 ticks waiting for echo */
@@ -462,8 +499,7 @@ olnk_status_t olnk_link_handle_baud_responder(olnk_ctx_t *ctx) {
     for (retry = 0U; retry < OLNK_BEACON_MAX_RETRIES; ++retry) {
         st = hal_write_byte(ctx, beacon, ctx->tx_timeout_ms);
         if (st != OLNK_OK) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return st;
+            goto revert;
         }
         st = hal_read_byte(ctx, &rx_byte, OLNK_TIMEOUT_BEACON_TICK_MS);
         if ((st == OLNK_OK) && (rx_byte == beacon)) {
@@ -473,38 +509,46 @@ olnk_status_t olnk_link_handle_baud_responder(olnk_ctx_t *ctx) {
     }
 
     if (!locked) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return OLNK_ERR_HAL_TIMEOUT;
+        st = OLNK_ERR_HAL_TIMEOUT;
+        goto revert;
     }
 
     /* Send ~beacon */
     st = hal_write_byte(ctx, (uint8_t)(~beacon), ctx->tx_timeout_ms);
     if (st != OLNK_OK) {
-        (void)hal_set_baud_idx(ctx, prev_baud_idx);
-        return st;
+        goto revert;
     }
 
     /* 4. 15-pair line quality test */
     for (k = 0U; k < OLNK_BAUD_TEST_LEN; ++k) {
         st = hal_read_byte(ctx, &rx_byte, ctx->rx_byte_timeout_ms);
         if ((st != OLNK_OK) || (rx_byte != olnk_baud_test_tx[k])) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+            st = (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+            goto revert;
         }
         st = hal_write_byte(ctx, olnk_baud_test_rx[k], ctx->tx_timeout_ms);
         if (st != OLNK_OK) {
-            (void)hal_set_baud_idx(ctx, prev_baud_idx);
-            return st;
+            goto revert;
         }
     }
 
     ctx->current_baud_idx = target_baud_idx;
     ctx->baud_switches += 1U;
     return OLNK_OK;
+
+revert:
+    (void)hal_set_baud_idx(ctx, prev_baud_idx);
+    return st;
 }
 
 olnk_status_t olnk_link_connect_client(olnk_ctx_t *ctx) {
+    static const uint8_t sync_pairs[6] = {
+        OLNK_SYNC_C1, OLNK_SYNC_S1,
+        OLNK_SYNC_C2, OLNK_SYNC_S2,
+        OLNK_SYNC_C3, OLNK_SYNC_S3
+    };
     uint8_t rx = 0U;
+    uint8_t i;
     olnk_status_t st;
 
     if (ctx == NULL) {
@@ -514,42 +558,21 @@ olnk_status_t olnk_link_connect_client(olnk_ctx_t *ctx) {
     ctx->link_state = (uint8_t)OLNK_LINK_SYNCING;
     ctx->current_baud_idx = (uint8_t)OLNK_BAUD_9600;
     if (!hal_set_baud_idx(ctx, (uint8_t)OLNK_BAUD_9600)) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return OLNK_ERR_HAL_IO;
+        st = OLNK_ERR_HAL_IO;
+        goto fail;
     }
 
     /* Phase A: 3-step Sync Handshake (0xAA->0x00, 0x55->0xFF, 0x5A->0x11) */
-    st = hal_write_byte(ctx, OLNK_SYNC_C1, ctx->sync_timeout_ms);
-    if (st != OLNK_OK) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return st;
-    }
-    st = hal_read_byte(ctx, &rx, ctx->sync_timeout_ms);
-    if ((st != OLNK_OK) || (rx != OLNK_SYNC_S1)) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
-    }
-
-    st = hal_write_byte(ctx, OLNK_SYNC_C2, ctx->sync_timeout_ms);
-    if (st != OLNK_OK) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return st;
-    }
-    st = hal_read_byte(ctx, &rx, ctx->sync_timeout_ms);
-    if ((st != OLNK_OK) || (rx != OLNK_SYNC_S2)) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
-    }
-
-    st = hal_write_byte(ctx, OLNK_SYNC_C3, ctx->sync_timeout_ms);
-    if (st != OLNK_OK) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return st;
-    }
-    st = hal_read_byte(ctx, &rx, ctx->sync_timeout_ms);
-    if ((st != OLNK_OK) || (rx != OLNK_SYNC_S3)) {
-        ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
-        return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+    for (i = 0U; i < 6U; i = (uint8_t)(i + 2U)) {
+        st = hal_write_byte(ctx, sync_pairs[i], ctx->sync_timeout_ms);
+        if (st != OLNK_OK) {
+            goto fail;
+        }
+        st = hal_read_byte(ctx, &rx, ctx->sync_timeout_ms);
+        if ((st != OLNK_OK) || (rx != sync_pairs[i + 1U])) {
+            st = (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+            goto fail;
+        }
     }
 
     /* Link established at 9600 bps, seq = 0 */
@@ -570,6 +593,10 @@ olnk_status_t olnk_link_connect_client(olnk_ctx_t *ctx) {
     }
 
     return OLNK_OK;
+
+fail:
+    ctx->link_state = (uint8_t)OLNK_LINK_DISCONNECTED;
+    return st;
 }
 
 static olnk_status_t send_frame_once(
@@ -625,41 +652,19 @@ static olnk_status_t send_frame_once(
 
     /* 2. Send length, payload, crc_hi, crc_lo */
     if (echo_mode) {
-        uint8_t echoed = 0U;
-
-        for (i = 0U; i < len_sz; ++i) {
-            st = hal_write_byte(ctx, len_bytes[i], ctx->tx_timeout_ms);
-            if (st != OLNK_OK) {
-                return st;
-            }
-            st = hal_read_byte(ctx, &echoed, ctx->tx_timeout_ms);
-            if ((st != OLNK_OK) || (echoed != len_bytes[i])) {
-                return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
-            }
-        }
-
-        for (i = 0U; i < (size_t)payload_len; ++i) {
-            st = hal_write_byte(ctx, payload[i], ctx->tx_timeout_ms);
-            if (st != OLNK_OK) {
-                return st;
-            }
-            st = hal_read_byte(ctx, &echoed, ctx->tx_timeout_ms);
-            if ((st != OLNK_OK) || (echoed != payload[i])) {
-                return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
-            }
-        }
-
-        /* Echo crc_hi */
-        st = hal_write_byte(ctx, crc_be[0], ctx->tx_timeout_ms);
+        st = hal_write_echo(ctx, len_bytes, len_sz);
         if (st != OLNK_OK) {
             return st;
         }
-        st = hal_read_byte(ctx, &echoed, ctx->tx_timeout_ms);
-        if ((st != OLNK_OK) || (echoed != crc_be[0])) {
-            return (st == OLNK_OK) ? OLNK_ERR_PROTOCOL : st;
+        st = hal_write_echo(ctx, payload, (size_t)payload_len);
+        if (st != OLNK_OK) {
+            return st;
         }
-
-        /* crc_lo is NOT echoed — receiver evaluates CRC and sends final_ack directly */
+        /* Echo crc_hi; crc_lo is NOT echoed (receiver validates CRC and replies final_ack) */
+        st = hal_write_echo(ctx, &crc_be[0], 1U);
+        if (st != OLNK_OK) {
+            return st;
+        }
         st = hal_write_byte(ctx, crc_be[1], ctx->tx_timeout_ms);
         if (st != OLNK_OK) {
             return st;
@@ -858,17 +863,9 @@ olnk_status_t olnk_link_recv_frame(
 
     /* 3. Receive length field */
     is_short = ((hdr & OLNK_HDR_SHORT_LEN) != 0U);
-    st = hal_read_byte(ctx, &b, ctx->rx_byte_timeout_ms);
+    st = hal_recv_crc_byte(ctx, &b, &crc, echo_mode);
     if (st != OLNK_OK) {
-        ctx->frames_rx_err += 1U;
         return st;
-    }
-    crc = olnk_crc16_update(crc, b);
-    if (echo_mode) {
-        st = hal_write_byte(ctx, b, ctx->tx_timeout_ms);
-        if (st != OLNK_OK) {
-            return st;
-        }
     }
 
     if (is_short) {
@@ -876,17 +873,9 @@ olnk_status_t olnk_link_recv_frame(
     } else {
         uint8_t hi = 0U;
         uint8_t lo = b;
-        st = hal_read_byte(ctx, &hi, ctx->rx_byte_timeout_ms);
+        st = hal_recv_crc_byte(ctx, &hi, &crc, echo_mode);
         if (st != OLNK_OK) {
-            ctx->frames_rx_err += 1U;
             return st;
-        }
-        crc = olnk_crc16_update(crc, hi);
-        if (echo_mode) {
-            st = hal_write_byte(ctx, hi, ctx->tx_timeout_ms);
-            if (st != OLNK_OK) {
-                return st;
-            }
         }
         payload_len = (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8U));
     }
@@ -899,42 +888,21 @@ olnk_status_t olnk_link_recv_frame(
 
     /* 4. Receive payload bytes */
     for (i = 0U; i < payload_len; ++i) {
-        st = hal_read_byte(ctx, &b, ctx->rx_byte_timeout_ms);
-        if (st != OLNK_OK) {
-            ctx->frames_rx_err += 1U;
-            return st;
-        }
-        dst[i] = b;
-        crc = olnk_crc16_update(crc, b);
-        if (echo_mode) {
-            st = hal_write_byte(ctx, b, ctx->tx_timeout_ms);
-            if (st != OLNK_OK) {
-                return st;
-            }
-        }
-    }
-
-    /* 5. Receive crc_hi (echoed in Echo mode) */
-    st = hal_read_byte(ctx, &b, ctx->rx_byte_timeout_ms);
-    if (st != OLNK_OK) {
-        ctx->frames_rx_err += 1U;
-        return st;
-    }
-    crc = olnk_crc16_update(crc, b);
-    if (echo_mode) {
-        st = hal_write_byte(ctx, b, ctx->tx_timeout_ms);
+        st = hal_recv_crc_byte(ctx, &dst[i], &crc, echo_mode);
         if (st != OLNK_OK) {
             return st;
         }
     }
 
-    /* 6. Receive crc_lo (NEVER echoed!) */
-    st = hal_read_byte(ctx, &b, ctx->rx_byte_timeout_ms);
+    /* 5. Receive crc_hi (echoed in Echo mode) & crc_lo (NEVER echoed!) */
+    st = hal_recv_crc_byte(ctx, &b, &crc, echo_mode);
     if (st != OLNK_OK) {
-        ctx->frames_rx_err += 1U;
         return st;
     }
-    crc = olnk_crc16_update(crc, b);
+    st = hal_recv_crc_byte(ctx, &b, &crc, false);
+    if (st != OLNK_OK) {
+        return st;
+    }
 
     /* 7. Validate CRC-16/GENIBUS residue == 0x1D0F */
     if (crc != OLNK_CRC16_RESIDUE_GOOD) {

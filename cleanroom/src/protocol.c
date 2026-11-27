@@ -38,10 +38,9 @@ uint16_t olnk_read_u16_be(const uint8_t *buf) {
 }
 
 uint32_t olnk_read_u32_le(const uint8_t *buf) {
-    return ((uint32_t)buf[0]) |
-           ((uint32_t)buf[1] << 8U) |
-           ((uint32_t)buf[2] << 16U) |
-           ((uint32_t)buf[3] << 24U);
+    uint16_t lo = olnk_read_u16_le(buf);
+    uint16_t hi = olnk_read_u16_le(&buf[2]);
+    return ((uint32_t)hi << 16U) | (uint32_t)lo;
 }
 
 void olnk_write_u16_le(uint8_t *buf, uint16_t value) {
@@ -55,10 +54,8 @@ void olnk_write_u16_be(uint8_t *buf, uint16_t value) {
 }
 
 void olnk_write_u32_le(uint8_t *buf, uint32_t value) {
-    buf[0] = (uint8_t)(value & 0xFFU);
-    buf[1] = (uint8_t)((value >> 8U) & 0xFFU);
-    buf[2] = (uint8_t)((value >> 16U) & 0xFFU);
-    buf[3] = (uint8_t)((value >> 24U) & 0xFFU);
+    olnk_write_u16_le(buf, (uint16_t)(value & 0xFFFFUL));
+    olnk_write_u16_le(&buf[2], (uint16_t)(value >> 16U));
 }
 
 /* =========================================================================

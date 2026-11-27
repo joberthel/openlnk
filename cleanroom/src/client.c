@@ -17,24 +17,21 @@ static void cli_drain_rx(olnk_client_t *cli, uint32_t quiet_ms) {
     }
 }
 
-static olnk_status_t cli_exchange_single(
+static olnk_status_t cli_send_and_turn(
     olnk_client_t *cli,
-    const uint8_t *req_buf,
-    uint16_t req_len,
-    uint16_t *out_resp_len
+    const uint8_t *buf,
+    uint16_t len
 ) {
-    bool more = false;
-    olnk_status_t st;
+    olnk_status_t st = olnk_link_send_frame(&cli->link, buf, len, false);
+    if (st != OLNK_OK) {
+        return st;
+    }
+    return olnk_link_send_turnaround(&cli->link);
+}
 
-    st = olnk_link_send_frame(&cli->link, req_buf, req_len, false);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_turnaround(&cli->link);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_recv_frame(
+static olnk_status_t cli_recv_ctrl(olnk_client_t *cli, uint16_t *out_resp_len) {
+    bool more = false;
+    return olnk_link_recv_frame(
         &cli->link,
         cli->ctrl_buf,
         sizeof(cli->ctrl_buf),
@@ -42,16 +39,51 @@ static olnk_status_t cli_exchange_single(
         &more,
         cli->rpc_timeout_ms
     );
+}
+
+static olnk_status_t cli_recv_ctrl_and_turn(olnk_client_t *cli, uint16_t *out_resp_len) {
+    olnk_status_t st = cli_recv_ctrl(cli, out_resp_len);
     if (st != OLNK_OK) {
         return st;
     }
     st = olnk_link_wait_turnaround(&cli->link, cli->rpc_timeout_ms);
+    if (st == OLNK_OK) {
+        cli->rpc_count += 1U;
+    }
+    return st;
+}
+
+static olnk_status_t cli_exchange_single(
+    olnk_client_t *cli,
+    const uint8_t *req_buf,
+    uint16_t req_len,
+    uint16_t *out_resp_len
+) {
+    olnk_status_t st = cli_send_and_turn(cli, req_buf, req_len);
     if (st != OLNK_OK) {
         return st;
     }
+    return cli_recv_ctrl_and_turn(cli, out_resp_len);
+}
 
-    cli->rpc_count += 1U;
-    return OLNK_OK;
+static olnk_status_t cli_send_sector_io_hdr(
+    olnk_client_t *cli,
+    uint8_t opcode,
+    uint8_t unit,
+    uint8_t media_descriptor,
+    uint32_t start_lba,
+    uint16_t sector_count
+) {
+    uint8_t req_buf[OLNK_LEN_SECTOR_IO_REQ];
+    bool use_lba32 = olnk_client_unit_supports_lba32(cli, unit) || (start_lba >= 0xFFFFUL);
+
+    req_buf[0] = opcode;
+    req_buf[1] = unit;
+    req_buf[2] = media_descriptor;
+    olnk_write_u16_le(&req_buf[3], sector_count);
+    olnk_write_u16_le(&req_buf[5], use_lba32 ? 0xFFFFU : (uint16_t)start_lba);
+    olnk_write_u32_le(&req_buf[7], start_lba);
+    return olnk_link_send_frame(&cli->link, req_buf, OLNK_LEN_SECTOR_IO_REQ, false);
 }
 
 olnk_status_t olnk_client_init(olnk_client_t *cli, olnk_transport_t transport) {
@@ -108,13 +140,9 @@ olnk_status_t olnk_client_session_sync(
     bool ext_info,
     olnk_session_sync_resp_t *out_resp
 ) {
-    olnk_sync_trigger_t trig;
-    olnk_session_sync_req_t req;
     olnk_session_sync_resp_t resp;
     uint8_t req_buf[OLNK_LEN_SESSION_SYNC_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
-    bool more = false;
     olnk_status_t st;
 
     if (cli == NULL) {
@@ -126,52 +154,24 @@ olnk_status_t olnk_client_session_sync(
     }
 
     /* Frame 1: 2-byte trigger (00 00), NO turnaround after */
-    trig.opcode = (uint8_t)OLNK_OP_SESSION_SYNC;
-    trig.subcode = 0U;
-    st = olnk_encode_sync_trigger(&trig, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
+    req_buf[0] = (uint8_t)OLNK_OP_SESSION_SYNC;
+    req_buf[1] = 0U;
+    st = olnk_link_send_frame(&cli->link, req_buf, OLNK_LEN_SYNC_TRIGGER, false);
     if (st != OLNK_OK) {
         return st;
     }
 
     /* Frame 2: 34-byte session sync request */
-    memset(&req, 0, sizeof(req));
-    req.client_version = OLNK_CLIENT_VERSION_DOS622;
-    req.proto_major = 1U;
-    req.ext_info_flag = ext_info ? 1U : 0U;
-    req.capability = 1U;
-    req.max_block_size = (uint16_t)OLNK_MAX_PAYLOAD_SIZE;
-    req.client_id = cli->link.client_id;
-    req.server_id = cli->link.server_id;
+    memset(req_buf, 0, sizeof(req_buf));
+    olnk_write_u16_le(&req_buf[6], OLNK_CLIENT_VERSION_DOS622);
+    req_buf[8] = 1U;
+    req_buf[9] = ext_info ? 1U : 0U;
+    req_buf[11] = 1U;
+    olnk_write_u16_le(&req_buf[12], (uint16_t)OLNK_MAX_PAYLOAD_SIZE);
+    olnk_write_u32_le(&req_buf[26], cli->link.client_id);
+    olnk_write_u32_le(&req_buf[30], cli->link.server_id);
 
-    st = olnk_encode_session_sync_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_turnaround(&cli->link);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
-    st = olnk_link_recv_frame(
-        &cli->link,
-        cli->ctrl_buf,
-        sizeof(cli->ctrl_buf),
-        &resp_len,
-        &more,
-        cli->rpc_timeout_ms
-    );
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_wait_turnaround(&cli->link, cli->rpc_timeout_ms);
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_SESSION_SYNC_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -180,8 +180,6 @@ olnk_status_t olnk_client_session_sync(
     if (st != OLNK_OK) {
         return st;
     }
-
-    cli->rpc_count += 1U;
     if (resp.ready_flag == 0U) {
         return OLNK_ERR_PROTOCOL;
     }
@@ -212,10 +210,7 @@ olnk_status_t olnk_client_map_config(
     uint8_t first_client_drive,
     olnk_map_config_resp_t *out_resp
 ) {
-    olnk_map_config_req_t req;
-    olnk_map_config_resp_t resp;
     uint8_t req_buf[OLNK_LEN_MAP_CONFIG_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     olnk_status_t st;
 
@@ -223,41 +218,33 @@ olnk_status_t olnk_client_map_config(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    memset(&req, 0, sizeof(req));
-    req.opcode = (uint8_t)OLNK_OP_MAP_CONFIG;
-    req.client_proto_ver = OLNK_MAP_PROTO_VER;
-    req.client_dos_minor = OLNK_DOS_VER_MINOR;
-    req.client_dos_major = OLNK_DOS_VER_MAJOR;
-    req.max_client_drives = max_client_drives;
-    req.first_client_drive = first_client_drive;
-    req.lpt_map_req[0] = OLNK_MAP_NONE;
-    req.lpt_map_req[1] = OLNK_MAP_NONE;
-    req.lpt_map_req[2] = OLNK_MAP_NONE;
-    memset(req.drive_map_req, OLNK_MAP_AUTO, sizeof(req.drive_map_req));
+    req_buf[0] = (uint8_t)OLNK_OP_MAP_CONFIG;
+    olnk_write_u16_le(&req_buf[1], OLNK_MAP_PROTO_VER);
+    req_buf[3] = OLNK_DOS_VER_MINOR;
+    req_buf[4] = OLNK_DOS_VER_MAJOR;
+    req_buf[5] = max_client_drives;
+    req_buf[6] = first_client_drive;
+    memset(&req_buf[7], OLNK_MAP_NONE, OLNK_MAX_LPTS);
+    memset(&req_buf[10], OLNK_MAP_AUTO, OLNK_MAX_DRIVES);
 
-    st = olnk_encode_map_config_req(&req, req_buf, sizeof(req_buf), &req_len);
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_MAP_CONFIG_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
 
-    st = cli_exchange_single(cli, req_buf, (uint16_t)req_len, &resp_len);
+    /* Decode directly into cli->map (olnk_decode_map_config_resp validates length before writes) */
+    st = olnk_decode_map_config_resp(cli->ctrl_buf, (size_t)resp_len, &cli->map);
     if (st != OLNK_OK) {
         return st;
     }
 
-    st = olnk_decode_map_config_resp(cli->ctrl_buf, (size_t)resp_len, &resp);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
-    cli->map = resp;
     cli->has_map = true;
-    if (resp.server_flags != 0U) {
+    if (cli->map.server_flags != 0U) {
         /* Server requested timer/echo compatibility mode */
         cli->link.local_requires_echo = true;
     }
     if (out_resp != NULL) {
-        *out_resp = resp;
+        *out_resp = cli->map;
     }
     return OLNK_OK;
 }
@@ -274,9 +261,7 @@ olnk_status_t olnk_client_get_drive_info(
     uint8_t unit,
     olnk_get_drive_info_resp_t *out_resp
 ) {
-    olnk_get_drive_info_req_t req;
     uint8_t req_buf[OLNK_LEN_GET_DRIVE_INFO_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     olnk_status_t st;
 
@@ -284,13 +269,9 @@ olnk_status_t olnk_client_get_drive_info(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    req.opcode = (uint8_t)OLNK_OP_GET_DRIVE_INFO;
-    req.unit = unit;
-    st = olnk_encode_get_drive_info_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = cli_exchange_single(cli, req_buf, (uint16_t)req_len, &resp_len);
+    req_buf[0] = (uint8_t)OLNK_OP_GET_DRIVE_INFO;
+    req_buf[1] = unit;
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_GET_DRIVE_INFO_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -303,9 +284,7 @@ olnk_status_t olnk_client_media_check(
     uint8_t media_descriptor,
     olnk_media_check_resp_t *out_resp
 ) {
-    olnk_media_check_req_t req;
     uint8_t req_buf[OLNK_LEN_MEDIA_CHECK_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     olnk_status_t st;
 
@@ -313,14 +292,10 @@ olnk_status_t olnk_client_media_check(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    req.opcode = (uint8_t)OLNK_OP_MEDIA_CHECK;
-    req.unit = unit;
-    req.media_descriptor = media_descriptor;
-    st = olnk_encode_media_check_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = cli_exchange_single(cli, req_buf, (uint16_t)req_len, &resp_len);
+    req_buf[0] = (uint8_t)OLNK_OP_MEDIA_CHECK;
+    req_buf[1] = unit;
+    req_buf[2] = media_descriptor;
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_MEDIA_CHECK_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -333,9 +308,7 @@ olnk_status_t olnk_client_build_bpb(
     uint8_t media_descriptor,
     olnk_build_bpb_resp_t *out_resp
 ) {
-    olnk_build_bpb_req_t req;
     uint8_t req_buf[OLNK_LEN_BUILD_BPB_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     olnk_status_t st;
 
@@ -343,14 +316,10 @@ olnk_status_t olnk_client_build_bpb(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    req.opcode = (uint8_t)OLNK_OP_BUILD_BPB;
-    req.unit = unit;
-    req.media_descriptor = media_descriptor;
-    st = olnk_encode_build_bpb_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = cli_exchange_single(cli, req_buf, (uint16_t)req_len, &resp_len);
+    req_buf[0] = (uint8_t)OLNK_OP_BUILD_BPB;
+    req_buf[1] = unit;
+    req_buf[2] = media_descriptor;
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_BUILD_BPB_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -368,14 +337,9 @@ olnk_status_t olnk_client_read_sectors(
     uint32_t out_cap,
     olnk_sector_io_resp_t *out_resp
 ) {
-    olnk_sector_io_req_t req;
     olnk_sector_io_resp_t resp;
-    uint8_t req_buf[OLNK_LEN_SECTOR_IO_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     uint16_t bps = (bytes_per_sector != 0U) ? bytes_per_sector : OLNK_SECTOR_SIZE;
-    bool use_lba32;
-    bool more = false;
     olnk_status_t st;
 
     if ((cli == NULL) || (out_resp == NULL)) {
@@ -388,20 +352,8 @@ olnk_status_t olnk_client_read_sectors(
         return OLNK_ERR_BUFFER_OVERFLOW;
     }
 
-    use_lba32 = olnk_client_unit_supports_lba32(cli, unit) || (start_lba >= 0xFFFFUL);
-    req.opcode = (uint8_t)OLNK_OP_READ_SECTORS;
-    req.unit = unit;
-    req.media_descriptor = media_descriptor;
-    req.sector_count = sector_count;
-    req.start_sector_16 = use_lba32 ? 0xFFFFU : (uint16_t)start_lba;
-    req.start_sector_32 = start_lba;
-
-    st = olnk_encode_sector_io_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
+    st = cli_send_sector_io_hdr(
+        cli, (uint8_t)OLNK_OP_READ_SECTORS, unit, media_descriptor, start_lba, sector_count);
     if (st != OLNK_OK) {
         return st;
     }
@@ -411,14 +363,7 @@ olnk_status_t olnk_client_read_sectors(
     }
 
     /* Receive 4B (or 20B on 0x0F) status header frame */
-    st = olnk_link_recv_frame(
-        &cli->link,
-        cli->ctrl_buf,
-        sizeof(cli->ctrl_buf),
-        &resp_len,
-        &more,
-        cli->rpc_timeout_ms
-    );
+    st = cli_recv_ctrl(cli, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -465,14 +410,9 @@ olnk_status_t olnk_client_write_sectors(
     bool verify,
     olnk_sector_io_resp_t *out_resp
 ) {
-    olnk_sector_io_req_t req;
     olnk_sector_io_resp_t resp;
-    uint8_t req_buf[OLNK_LEN_SECTOR_IO_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     uint16_t bps = (bytes_per_sector != 0U) ? bytes_per_sector : OLNK_SECTOR_SIZE;
-    bool use_lba32;
-    bool more = false;
     olnk_status_t st;
 
     if ((cli == NULL) || (out_resp == NULL)) {
@@ -482,21 +422,15 @@ olnk_status_t olnk_client_write_sectors(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    use_lba32 = olnk_client_unit_supports_lba32(cli, unit) || (start_lba >= 0xFFFFUL);
-    req.opcode = (uint8_t)(verify ? OLNK_OP_WRITE_VERIFY : OLNK_OP_WRITE_SECTORS);
-    req.unit = unit;
-    req.media_descriptor = media_descriptor;
-    req.sector_count = sector_count;
-    req.start_sector_16 = use_lba32 ? 0xFFFFU : (uint16_t)start_lba;
-    req.start_sector_32 = start_lba;
-
-    st = olnk_encode_sector_io_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
     /* Frame 1: 11-byte write header (NO turnaround) */
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
+    st = cli_send_sector_io_hdr(
+        cli,
+        (uint8_t)(verify ? OLNK_OP_WRITE_VERIFY : OLNK_OP_WRITE_SECTORS),
+        unit,
+        media_descriptor,
+        start_lba,
+        sector_count
+    );
     if (st != OLNK_OK) {
         return st;
     }
@@ -515,18 +449,7 @@ olnk_status_t olnk_client_write_sectors(
         return st;
     }
 
-    st = olnk_link_recv_frame(
-        &cli->link,
-        cli->ctrl_buf,
-        sizeof(cli->ctrl_buf),
-        &resp_len,
-        &more,
-        cli->rpc_timeout_ms
-    );
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_wait_turnaround(&cli->link, cli->rpc_timeout_ms);
+    st = cli_recv_ctrl_and_turn(cli, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -536,7 +459,6 @@ olnk_status_t olnk_client_write_sectors(
         return st;
     }
 
-    cli->rpc_count += 1U;
     if ((resp.status & OLNK_DOS_STATUS_ERROR) == 0U) {
         cli->sectors_written_total += (uint32_t)resp.sectors_transferred;
     }
@@ -550,9 +472,7 @@ olnk_status_t olnk_client_blk_ctrl(
     uint8_t unit,
     uint16_t *out_status
 ) {
-    olnk_unit_ctrl_req_t req;
     uint8_t req_buf[OLNK_LEN_UNIT_CTRL_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     olnk_status_t st;
 
@@ -560,13 +480,9 @@ olnk_status_t olnk_client_blk_ctrl(
         return OLNK_ERR_INVALID_ARG;
     }
 
-    req.opcode = opcode;
-    req.unit = unit;
-    st = olnk_encode_unit_ctrl_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = cli_exchange_single(cli, req_buf, (uint16_t)req_len, &resp_len);
+    req_buf[0] = opcode;
+    req_buf[1] = unit;
+    st = cli_exchange_single(cli, req_buf, OLNK_LEN_UNIT_CTRL_REQ, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -578,26 +494,20 @@ olnk_status_t olnk_client_drive_incompat(
     uint8_t client_unit,
     uint8_t server_unit
 ) {
-    olnk_drive_incompat_t msg;
     uint8_t req_buf[OLNK_LEN_DRIVE_INCOMPAT];
-    size_t req_len = 0U;
     olnk_status_t st;
 
     if (cli == NULL) {
         return OLNK_ERR_INVALID_ARG;
     }
 
-    msg.opcode = (uint8_t)OLNK_OP_DRIVE_INCOMPAT;
-    msg.flag = 0xFFU;
-    msg.client_unit = client_unit;
-    msg.reason = 0x00U;
-    msg.server_unit = server_unit;
-    st = olnk_encode_drive_incompat(&msg, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
+    req_buf[0] = (uint8_t)OLNK_OP_DRIVE_INCOMPAT;
+    req_buf[1] = 0xFFU;
+    req_buf[2] = client_unit;
+    req_buf[3] = 0x00U;
+    req_buf[4] = server_unit;
     /* One-way notification: no turnaround, no server response */
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
+    st = olnk_link_send_frame(&cli->link, req_buf, OLNK_LEN_DRIVE_INCOMPAT, false);
     if (st == OLNK_OK) {
         cli->rpc_count += 1U;
     }
@@ -610,12 +520,9 @@ olnk_status_t olnk_client_get_media_id(
     uint16_t *out_status,
     olnk_generic_ioctl_mid_t *out_mid
 ) {
-    olnk_generic_ioctl_req_t req;
     uint8_t req_buf[OLNK_LEN_GENERIC_IOCTL_REQ];
-    size_t req_len = 0U;
     uint16_t resp_len = 0U;
     uint16_t dos_status = 0U;
-    bool more = false;
     olnk_status_t st;
 
     if ((cli == NULL) || (out_status == NULL) || (out_mid == NULL)) {
@@ -623,32 +530,17 @@ olnk_status_t olnk_client_get_media_id(
     }
 
     memset(out_mid, 0, sizeof(*out_mid));
-    req.opcode = (uint8_t)OLNK_OP_GENERIC_IOCTL;
-    req.unit = unit;
-    req.category = OLNK_IOCTL_CAT_DISK;
-    req.function = OLNK_IOCTL_FN_GET_MEDIA_ID;
+    req_buf[0] = (uint8_t)OLNK_OP_GENERIC_IOCTL;
+    req_buf[1] = unit;
+    req_buf[2] = OLNK_IOCTL_CAT_DISK;
+    req_buf[3] = OLNK_IOCTL_FN_GET_MEDIA_ID;
 
-    st = olnk_encode_generic_ioctl_req(&req, req_buf, sizeof(req_buf), &req_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_frame(&cli->link, req_buf, (uint16_t)req_len, false);
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_send_turnaround(&cli->link);
+    st = cli_send_and_turn(cli, req_buf, OLNK_LEN_GENERIC_IOCTL_REQ);
     if (st != OLNK_OK) {
         return st;
     }
 
-    st = olnk_link_recv_frame(
-        &cli->link,
-        cli->ctrl_buf,
-        sizeof(cli->ctrl_buf),
-        &resp_len,
-        &more,
-        cli->rpc_timeout_ms
-    );
+    st = cli_recv_ctrl(cli, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
@@ -658,14 +550,7 @@ olnk_status_t olnk_client_get_media_id(
     }
 
     if ((dos_status & OLNK_DOS_STATUS_ERROR) == 0U) {
-        st = olnk_link_recv_frame(
-            &cli->link,
-            cli->ctrl_buf,
-            sizeof(cli->ctrl_buf),
-            &resp_len,
-            &more,
-            cli->rpc_timeout_ms
-        );
+        st = cli_recv_ctrl(cli, &resp_len);
         if (st != OLNK_OK) {
             return st;
         }
@@ -691,64 +576,35 @@ olnk_status_t olnk_client_set_media_id(
     const olnk_generic_ioctl_mid_t *mid,
     uint16_t *out_status
 ) {
-    olnk_generic_ioctl_req_t req;
     uint8_t hdr_buf[OLNK_LEN_GENERIC_IOCTL_REQ];
     uint8_t mid_buf[OLNK_LEN_GENERIC_IOCTL_MID];
-    size_t hdr_len = 0U;
     size_t mid_len = 0U;
     uint16_t resp_len = 0U;
-    bool more = false;
     olnk_status_t st;
 
     if ((cli == NULL) || (mid == NULL) || (out_status == NULL)) {
         return OLNK_ERR_INVALID_ARG;
     }
 
-    req.opcode = (uint8_t)OLNK_OP_GENERIC_IOCTL;
-    req.unit = unit;
-    req.category = OLNK_IOCTL_CAT_DISK;
-    req.function = OLNK_IOCTL_FN_SET_MEDIA_ID;
+    hdr_buf[0] = (uint8_t)OLNK_OP_GENERIC_IOCTL;
+    hdr_buf[1] = unit;
+    hdr_buf[2] = OLNK_IOCTL_CAT_DISK;
+    hdr_buf[3] = OLNK_IOCTL_FN_SET_MEDIA_ID;
 
-    st = olnk_encode_generic_ioctl_req(&req, hdr_buf, sizeof(hdr_buf), &hdr_len);
-    if (st != OLNK_OK) {
-        return st;
-    }
     st = olnk_encode_generic_ioctl_mid(mid, mid_buf, sizeof(mid_buf), &mid_len);
     if (st != OLNK_OK) {
         return st;
     }
 
-    /* Frame 1: 4B IOCTL header (NO turnaround), Frame 2: 25B MID */
-    st = olnk_link_send_frame(&cli->link, hdr_buf, (uint16_t)hdr_len, false);
+    /* Frame 1: 4B IOCTL header (NO turnaround), Frame 2: 25B MID + turnaround */
+    st = olnk_link_send_frame(&cli->link, hdr_buf, OLNK_LEN_GENERIC_IOCTL_REQ, false);
     if (st != OLNK_OK) {
         return st;
     }
-    st = olnk_link_send_frame(&cli->link, mid_buf, (uint16_t)mid_len, false);
+    st = cli_exchange_single(cli, mid_buf, (uint16_t)mid_len, &resp_len);
     if (st != OLNK_OK) {
         return st;
     }
-    st = olnk_link_send_turnaround(&cli->link);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
-    st = olnk_link_recv_frame(
-        &cli->link,
-        cli->ctrl_buf,
-        sizeof(cli->ctrl_buf),
-        &resp_len,
-        &more,
-        cli->rpc_timeout_ms
-    );
-    if (st != OLNK_OK) {
-        return st;
-    }
-    st = olnk_link_wait_turnaround(&cli->link, cli->rpc_timeout_ms);
-    if (st != OLNK_OK) {
-        return st;
-    }
-
-    cli->rpc_count += 1U;
     return olnk_decode_status_only_resp(cli->ctrl_buf, (size_t)resp_len, out_status);
 }
 
