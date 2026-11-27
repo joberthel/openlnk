@@ -4,7 +4,7 @@ AR      ?= ar
 CFLAGS  ?= -std=c99 -Wall -Wextra -Werror -pedantic -O2
 INCLUDES := -Iinclude
 
-CORE_SRCS := src/openlnk.c src/crc16.c src/protocol.c src/storage_mem.c src/server.c
+CORE_SRCS := src/openlnk.c src/crc16.c src/protocol.c src/storage_mem.c src/server.c src/client.c
 CORE_OBJS := $(CORE_SRCS:.c=.o)
 
 .PHONY: all test clean
@@ -32,6 +32,7 @@ test_libopenlnk: tests/test_libopenlnk.c libopenlnk.a
 test: all
 	./test_libopenlnk
 	./opensvr --self-test
+	./openlnk --self-test
 
 clean:
 	rm -f $(CORE_OBJS) libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk

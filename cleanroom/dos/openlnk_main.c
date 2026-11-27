@@ -3,7 +3,7 @@
  * 16-bit Real-Mode MS-DOS OPENLNK.EXE clean-room client CLI target
  * compiled with Open Watcom v2 (-ms small memory model, 8086/8088 safe).
  */
-#include "openlnk/openlnk.h"
+#include "openlnk/client.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -29,7 +29,7 @@ static bool dos_cli_set_baud(uint32_t baudrate, void *user_data) {
     return true;
 }
 
-static olnk_ctx_t g_dos_client;
+static olnk_client_t g_dos_client;
 static uint8_t g_dos_wire_buf[64];
 
 int main(void) {
@@ -45,7 +45,7 @@ int main(void) {
     tr.set_baud = dos_cli_set_baud;
     tr.user_data = NULL;
 
-    if (olnk_init(&g_dos_client, tr) != OLNK_OK) {
+    if (olnk_client_init(&g_dos_client, tr) != OLNK_OK) {
         return 1;
     }
 

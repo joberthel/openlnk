@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "openlnk/openlnk.h"
+#include "openlnk/client.h"
 #include "openlnk/server.h"
 #include "openlnk/storage.h"
 
