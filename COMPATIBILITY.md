@@ -30,7 +30,7 @@ All 7 Golden Traces have been 100% deterministically decoded and verified (**774
 
 | Platform Target | Toolchain | Architectural Constraints | Build Status | Test Status |
 | :--- | :--- | :--- | :---: | :---: |
-| Linux x86_64 Desktop | GCC / Clang (`-std=c99 -Werror -pedantic`) | Zero `malloc`, Zero FP | `CONFIGURED (CI)` | `READY (CI)` |
+| Linux x86_64 Desktop | GCC / Clang (`-std=c99 -Werror -pedantic`) | Zero `malloc`, Zero FP | `CONFIGURED (CI)` | `READY (CI, incl. ASan/UBSan)` |
 | macOS ARM64 Desktop | Apple Clang (`-std=c99 -Werror -pedantic -Wconversion`) | Zero `malloc`, Zero FP | `PASS` | `PASS (CTest, self-test, 24/24 parity, 86Box Oracle + Real DOS HW PL2303 RS-232)` |
 | Windows x64 Desktop | MSVC (`/W4 /WX`) | Zero `malloc`, Zero FP | `CONFIGURED (CI, _WIN32 audited)` | `READY (CI)` |
 | MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we -os -zm -s -zl` + WASM `-0`) | 8086/8088 / NEC V30 (`8250/16550A` + `INT 25h/26h` + `INT 21h`, 100% Zero-CRT) | `PASS (0 warnings: OPENSVR.EXE 16.7 KiB / 31.0 KiB RAM, OPENLNK.EXE 12.6 KiB / 24.2 KiB RAM, OPENLNK.SYS 14.7 KiB disk / 26.0 KiB resident RAM)` | `PASS (164/164 Sim-16550A CTest; Real MS-DOS HW Verified @ 115200 bps: OPENLNK.SYS T1-T7, OPENSVR.EXE, OPENLNK.EXE)` |

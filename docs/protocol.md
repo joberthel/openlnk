@@ -16,7 +16,7 @@ The MS-DOS 6.22 `INTERLNK` (client device driver) and `INTERSVR` (remote server)
 2. **Half-Duplex Link Layer:** Synchronisation handshake, stepwise baud-rate negotiation with 15-byte line quality testing, 2-bit sequence-numbered framing, adaptive echo-paced or burst byte transfer, CRC-16/GENIBUS integrity checking, multi-fragment reassembly (up to 8192 bytes per frame), half-duplex turnaround tokens, and 18.2 Hz idle keepalives.
 3. **Application / DOS Device RPC Layer:** Synchronous half-duplex request/response transactions forwarding MS-DOS block device driver commands (`0x00`–`0x1D`), character/printer (`LPT1`–`LPT3`) operations, BIOS `INT 17h` printer calls, and Generic IOCTL Media ID queries.
 
-Separately, **`INTERSVR /RCOPY`** implements a bare-PC bootstrap transfer over `CTTY COM1` + `FXB.COM` that reuses the exact same link-layer framing and CRC-16/GENIBUS algorithm (Section 6).
+Separately, **`INTERSVR /RCOPY`** implements a bare-PC bootstrap transfer over `CTTY COM1` + `FXB.COM` that reuses the exact same link-layer framing and CRC-16/GENIBUS algorithm (Section 5).
 
 > **Out of Scope (Future Revision):** 4-bit parallel nibble mode over LapLink-compatible LPT cables is not specified in this revision.
 

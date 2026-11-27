@@ -6,6 +6,8 @@ Connect an ESP32 + **3.3V MAX3232** RS-232 transceiver directly to a vintage IBM
 - **Server Mode (`esp32_server.c`):** Turn an ESP32 + microSD card into a solid-state MS-DOS 5.0 / 6.22 `INTERSVR`-compatible serial block server (`INTERLNK.EXE` / `OPENLNK.SYS` on the PC).
 - **Client Mode + `/dos` VFS Mount (`esp32_client.c`, `esp32_client_vfs.c`):** Connect to a vintage PC running `INTERSVR.EXE`, `OPENSVR.EXE`, or desktop `opensvr` and mount its remote FAT12/FAT16 hard drive directly as a standard ESP-IDF POSIX filesystem (`/dos`) via `fopen`/`fread`/`fwrite`/`opendir`/`mkdir`/`unlink`, or stream raw sector backups directly to an SD card or HTTP sink.
 
+Related docs: [Root README](../README.md) · [MS-DOS 16-Bit Guide](../cleanroom/dos/README.md) · [Protocol Specification](../docs/protocol.md) · [Compatibility Matrix](../COMPATIBILITY.md)
+
 ---
 
 ## Features
@@ -186,7 +188,7 @@ python3 esp32/tools/make_arduino_bundle.py --out dist/openlnk-arduino.zip
 
 ## Gate 5 (`TC_PLAT_01`) Hardware Parity Soak-Test Checklist
 
-Before marking `COMPATIBILITY.md` Level 5 / Gate 5 (`TC_PLAT_01`) as `VERIFIED`, execute and archive logs for all steps on a real vintage DOS PC (e.g. IBM PC/XT 5160 or 286/386/486 with 8250/16450/16550A COM1):
+Before marking [COMPATIBILITY.md](../COMPATIBILITY.md) Level 5 / Gate 5 (`TC_PLAT_01`) as `VERIFIED`, execute and archive logs for all steps on a real vintage DOS PC (e.g. IBM PC/XT 5160 or 286/386/486 with 8250/16450/16550A COM1):
 
 - [ ] **Hardware Setup:** ESP32 + 3.3V MAX3232 + FAT16 microSD card wired via 3-wire null-modem to PC `COM1:`. Confirm common GND and 3.3V VCC on MAX3232.
 - [ ] **Phase A & B Connect:** Load `DEVICE=C:\DOS\INTERLNK.EXE /COM1` (or `OPENLNK.SYS /COM1`) on the PC. Verify ESP32 log prints `SYNC_OK`, stepwise `BAUD_SWITCH` up to target ceiling (e.g. 9600 on 8250 XT, up to 115200 on 16550A), `SESSION_SYNC`, and `MAP_CONFIG`.
