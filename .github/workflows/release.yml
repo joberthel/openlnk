@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: "Optional existing release tag (e.g. v0.2.0) to rebuild and upload assets for"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: release-please-${{ github.ref }}
@@ -19,16 +25,37 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
+      release_created: ${{ steps.resolve.outputs.should_build }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - name: Run release-please
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.republish_tag == '' }}
+        uses: googleapis/release-please-action@v4
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Resolve release target
+        id: resolve
+        shell: bash
+        env:
+          REPUBLISH_TAG: ${{ inputs.republish_tag }}
+          RP_CREATED: ${{ steps.release.outputs.release_created }}
+          RP_TAG: ${{ steps.release.outputs.tag_name }}
+          RP_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if [ -n "$REPUBLISH_TAG" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "tag_name=$REPUBLISH_TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${REPUBLISH_TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=${RP_CREATED:-false}" >> "$GITHUB_OUTPUT"
+            echo "tag_name=$RP_TAG" >> "$GITHUB_OUTPUT"
+            echo "version=$RP_VERSION" >> "$GITHUB_OUTPUT"
+          fi
 
   build-dos16:
     name: Build MS-DOS 16-Bit (Open Watcom v2)
@@ -39,6 +66,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - uses: actions/setup-python@v5
         with:
@@ -169,6 +198,8 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Configure CMake
         shell: bash
@@ -211,8 +242,12 @@ jobs:
           fi
           "$OPENSVR" --self-test
           "$OPENLNK" --self-test
-          "$OPENSVR" --version | tee /dev/stderr | grep -Fq "opensvr ${RELEASE_VERSION} "
-          "$OPENLNK" --version | tee /dev/stderr | grep -Fq "openlnk ${RELEASE_VERSION} "
+          ver_svr="$("$OPENSVR" --version)"
+          echo "$ver_svr"
+          printf '%s\n' "$ver_svr" | grep -Fq "opensvr ${RELEASE_VERSION} "
+          ver_cli="$("$OPENLNK" --version)"
+          echo "$ver_cli"
+          printf '%s\n' "$ver_cli" | grep -Fq "openlnk ${RELEASE_VERSION} "
 
       - name: Package Unix archive
         if: ${{ matrix.archive == 'tar.gz' }}
@@ -282,10 +317,9 @@ jobs:
         with:
           subject-path: release-assets/*
 
-      - name: Upload assets & publish GitHub Release
+      - name: Upload assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
           gh release upload "$TAG_NAME" release-assets/* --clobber
-          gh release edit "$TAG_NAME" --draft=false
