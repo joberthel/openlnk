@@ -43,7 +43,7 @@ jobs:
           python3 -m json.tool esp32/library.json > /dev/null
           python3 -m json.tool release-please-config.json > /dev/null
           python3 -m json.tool .release-please-manifest.json > /dev/null
-          python3 -m py_compile esp32/pio_build.py esp32/tools/make_arduino_bundle.py
+          python3 -m py_compile esp32/pio_build.py esp32/tools/make_arduino_bundle.py tools/bench/run_dos_ram_benchmark.py
 
   c99-native-build:
     name: C99 Native (${{ matrix.os }} / ${{ matrix.compiler }})

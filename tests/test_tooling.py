@@ -24,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from analysis import setup_ghidra
 from analysis.verifiers import verify_crc
+from tools.bench import run_dos_ram_benchmark as ram_bench
 from tools.ci import check_cleanroom_isolation as isolation
 from tools.ci import verify_dos_binaries
 from tools.sniffer import serial_mitm
@@ -307,6 +308,70 @@ class TestReleaseMetadataAndDosVerifier(unittest.TestCase):
                 self.assertIn("+<openlnk_core/*.c>", lib_json["build"]["srcFilter"])
                 props = zf.read("openlnk/library.properties").decode("utf-8")
                 self.assertRegex(props, re.compile(rf"^version={re.escape(version)}$", re.M))
+
+
+class TestDosRamBenchmark(unittest.TestCase):
+    def test_autoexec_respects_dos_cmdline_limit(self) -> None:
+        autoexec = ram_bench.build_autoexec()
+        lines = autoexec.splitlines()
+        self.assertGreater(len(lines), 40)
+        for idx, line in enumerate(lines, start=1):
+            self.assertLessEqual(
+                len(line),
+                ram_bench.DOS_MAX_CMDLINE,
+                f"AUTOEXEC line {idx} exceeds DOS 126-char limit: {line}",
+            )
+            if "COM2LOG -m" in line:
+                self.assertNotIn(">", line, f"Unexpected DOS redirection in COM2LOG line {idx}: {line}")
+
+    def test_parse_benchmark_log_extracts_drivers_and_limits(self) -> None:
+        sample = (
+            "@@@STEP_BEGIN STEP0 BASELINE_CLEAN_DOS622\r\n"
+            "  Conventional         655,360       63,152      592,208\r\n"
+            "  Largest executable program size        592,192   (578K)\r\n"
+            "@@@STEP_BEGIN STEP5 OPENLNK_8K_4DRV_COM1_OFFLINE\r\n"
+            "  Conventional         655,360       90,016      565,344\r\n"
+            "  Largest executable program size        565,328   (552K)\r\n"
+            "                     26,848   (26K)     D: - G:   Installed Device=OPENLNK \r\n"
+            "=== MEMBENCH target=C:\\BENCH\\OPENSVR.EXE limit_kb=31 free_before=1984 paras (31744 B) key=0x011B ticks=18 ===\r\n"
+            "  EXEC_RESULT: rc=0x8008 exit_code=0xFFFF ticks=0 inj_sent=0 alloc_events=0\r\n"
+            "=== MEMBENCH target=C:\\BENCH\\OPENSVR.EXE limit_kb=32 free_before=2048 paras (32768 B) key=0x011B ticks=18 ===\r\n"
+            "  EXEC_RESULT: rc=0x0000 exit_code=0x0000 ticks=18 inj_sent=1 alloc_events=0\r\n"
+            "  MCB_SUM[LIVE]: child_psp=9807 blocks=2 total_incl_hdr=32768 B aux=112 B\r\n"
+            "  DIRTY_SUMMARY: touched_paras=1831 (29296 B), exact_dirty_bytes=29197 B, hwm_from_free=32112 B, hwm_from_psp=32000 B (child_psp=9807)\r\n"
+        ).encode("ascii")
+        parsed = ram_bench.parse_benchmark_log(sample)
+        self.assertEqual(len(parsed["drivers"]), 2)
+        self.assertEqual(parsed["drivers"][0]["delta_used_bytes"], 0)
+        self.assertEqual(parsed["drivers"][1]["delta_used_bytes"], 26864)
+        self.assertEqual(parsed["drivers"][1]["mem_d_driver_bytes"], 26848)
+        self.assertEqual(parsed["min_limit_kb"]["C:\\BENCH\\OPENSVR.EXE"], 32)
+        self.assertEqual(parsed["exe_runs"][1]["hwm_from_psp_bytes"], 32000)
+
+        md = ram_bench.format_markdown_summary(parsed)
+        self.assertIn("26,864 B", md)
+        self.assertIn("`32 KiB`", md)
+
+    def test_inspect_dos_binary_mz_and_sys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            # Minimal valid MZ header: 1 page (512 B), hdr=32 B, minalloc=16 paras (256 B)
+            mz = bytearray(512)
+            mz[0:2] = b"MZ"
+            struct.pack_into("<13H", mz, 2, 0, 1, 0, 2, 16, 0xFFFF, 0, 0x100, 0, 0, 0, 0x1C, 0)
+            mz_path = tdir / "TEST.EXE"
+            mz_path.write_bytes(bytes(mz))
+            mz_info = ram_bench.inspect_dos_binary(mz_path)
+            self.assertEqual(mz_info["format"], "MZ")
+            self.assertEqual(mz_info["load_image_bytes"], 480)
+            self.assertEqual(mz_info["static_min_dos_ram_bytes"], 480 + 256 + 256)
+
+            sys_path = tdir / "TEST.SYS"
+            sys_hdr = struct.pack("<IHHHB", 0xFFFFFFFF, 0x2842, 0x0012, 0x001D, 1) + b"OPENLNK"
+            sys_path.write_bytes(sys_hdr + b"\x00" * 64)
+            sys_info = ram_bench.inspect_dos_binary(sys_path)
+            self.assertEqual(sys_info["format"], "SYS")
+            self.assertEqual(sys_info["signature"], "OPENLNK")
 
 
 if __name__ == "__main__":

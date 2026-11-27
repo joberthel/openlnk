@@ -186,6 +186,8 @@ All three targets compile with **Open Watcom v2** (`-ms -0 -za99 -wx -we -os -zm
 | `OPENSVR.EXE` | Standalone DOS MZ Server | `17,122 B` (`16.7 KiB`) | `31,744 B` (`31.0 KiB`, incl. 3 KiB stack) | Serves local DOS drives (hard disks, floppies, RAMDrives) over `COM1`–`COM4` |
 | `OPENLNK.EXE` | Standalone DOS MZ Client CLI | `12,934 B` (`12.6 KiB`) | `24,816 B` (`24.2 KiB`, incl. 3 KiB stack) | One-shot drive info, `/DIR`, and `/GET` without modifying `CONFIG.SYS` |
 
+> **MS-DOS 6.22 RAM Benchmark vs. Original `INTERLNK`/`INTERSVR`:** Measured live in 86Box MS-DOS 6.22 — `OPENSVR.EXE` uses **4.1×–5.3× less conventional RAM** than `INTERSVR.EXE` (`32 KiB` min / `31.3 KiB` HWM vs. `132 KiB` min / `165.1 KiB` claimed), while `OPENLNK.SYS` uses `26.2 KiB` (`22.2 KiB` at `MAX_PAYLOAD=4096`) vs. `7.7–9.3 KiB` for assembly `INTERLNK.EXE`. See **[docs/dos_ram_benchmark.md](docs/dos_ram_benchmark.md)** and [`tools/bench/run_dos_ram_benchmark.py`](tools/bench/run_dos_ram_benchmark.py).
+
 **Offline Boot & Lazy-Connect (`CONFIG.SYS`):**
 
 ```dosini
@@ -313,9 +315,9 @@ See **[docs/LEGAL_COMPLIANCE.md](docs/LEGAL_COMPLIANCE.md)** for the full compli
 | :--- | :--- |
 | `analysis/` | Agent A workspace (protocol analysis scripts and verification tooling; isolated from Agent B) |
 | `cleanroom/` | Agent B C99 core (`libopenlnk`), Desktop CLIs (`opensvr`, `openlnk`), 16-bit DOS targets ([`dos/README.md`](cleanroom/dos/README.md)), and host CTest suites |
-| `docs/` | Verified wire & RPC specification ([`protocol.md`](docs/protocol.md)) and clean-room charter ([`LEGAL_COMPLIANCE.md`](docs/LEGAL_COMPLIANCE.md)) |
+| `docs/` | Verified wire & RPC specification ([`protocol.md`](docs/protocol.md)), MS-DOS 6.22 RAM benchmark ([`dos_ram_benchmark.md`](docs/dos_ram_benchmark.md)), and clean-room charter ([`LEGAL_COMPLIANCE.md`](docs/LEGAL_COMPLIANCE.md)) |
 | `esp32/` | ESP-IDF 5.x, PlatformIO, and Arduino library, examples, and guide ([`esp32/README.md`](esp32/README.md)) |
 | `specs/` | Authoritative Kaitai Struct wire specification ([`interlnk_wire.ksy`](specs/interlnk_wire.ksy)) |
 | `tests/` | 24 JSON differential test vectors (`fixtures/`), Kaitai/C99 runner (`harness/`), Golden Traces ([`traces/README.md`](tests/traces/README.md)), and Python unit tests (`test_tooling.py`) |
-| `tools/` | Serial MITM sniffer (`sniffer/`), 86Box runner (`runner/`), Open Watcom Dockerfile (`docker/`), and CI isolation/binary verifiers (`ci/`) |
+| `tools/` | Serial MITM sniffer (`sniffer/`), 86Box runner (`runner/`), MS-DOS RAM benchmark suite (`bench/`), Open Watcom Dockerfile (`docker/`), and CI isolation/binary verifiers (`ci/`) |
 | [COMPATIBILITY.md](COMPATIBILITY.md) | 5-stage Definition of Done verification matrix and hardware test evidence |

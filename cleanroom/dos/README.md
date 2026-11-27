@@ -6,7 +6,7 @@ Clean-room, **100% Zero-CRT** 16-bit Real-Mode MS-DOS 5.0 / 6.0 / 6.22 driver, s
 - **Direct 8250 / 16450 / 16550A COM port HAL** — polled register I/O (no IRQ conflicts), automatic 16550A FIFO detection, 3-wire null-modem compatible up to **115200 bps**.
 - **Verified on real MS-DOS PC hardware** over RS-232 @ 115200 bps against desktop `opensvr` / `openlnk` and original MS-DOS `INTERLNK.EXE` / `INTERSVR.EXE` (see [COMPATIBILITY.md](../../COMPATIBILITY.md)).
 
-Related docs: [Root README](../../README.md) · [Protocol Specification](../../docs/protocol.md) · [Compatibility Matrix](../../COMPATIBILITY.md)
+Related docs: [Root README](../../README.md) · [Protocol Specification](../../docs/protocol.md) · [MS-DOS RAM Benchmark](../../docs/dos_ram_benchmark.md) · [Compatibility Matrix](../../COMPATIBILITY.md)
 
 ---
 
@@ -27,7 +27,7 @@ Compiled at default `MAX_PAYLOAD=8192` (`-ms -0 -za99 -wx -we -os -zm -s -zl` + 
   - Every Interrupt call atomically switches `SS:SP` (8088-safe `CLI`/`POPF`) onto a private `2,048 B` driver stack.
   - Sector transfers use a `4 KiB` (8-sector) bounce buffer aliased into `g_sys_client.link.rx_buffer` with 64 KiB segment-wrap-safe far-pointer normalization.
 - **`OPENSVR.EXE` & `OPENLNK.EXE`** link a minimal 75-byte assembly startup (`dos_exe_crt0.asm`), direct `INT 21h` console/file/keyboard HAL (`dos_hal_io.c`), and pure-8086 32-bit multiply/divide helpers (`__U4M`, `__I4M`, `__U4D`), eliminating Watcom's `cstart`, `stdio`, `ctype`, `conio`, and heap allocator.
-- Optional tighter RAM build: pass `MAX_PAYLOAD=4096` to `Makefile.watcom` to halve the static frame buffer from 8 KiB to 4 KiB when operating on heavily constrained 8088 systems.
+- Optional tighter RAM build: pass `MAX_PAYLOAD=4096` to `Makefile.watcom` to halve the static frame buffer from 8 KiB to 4 KiB when operating on heavily constrained 8088 systems (`OPENLNK.SYS` drops from `26.2 KiB` to `22.2 KiB` total DOS RAM; `OPENSVR.EXE` drops from `32 KiB` to `28 KiB` minimum free RAM — see [docs/dos_ram_benchmark.md](../../docs/dos_ram_benchmark.md) for live MS-DOS 6.22 measurements against `INTERLNK.EXE` / `INTERSVR.EXE`).
 
 ---
 
