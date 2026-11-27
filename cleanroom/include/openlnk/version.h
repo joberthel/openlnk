@@ -10,7 +10,7 @@
 
 #define OLNK_VERSION_MAJOR  0       /* x-release-please-major */
 #define OLNK_VERSION_MINOR  3       /* x-release-please-minor */
-#define OLNK_VERSION_PATCH  1       /* x-release-please-patch */
-#define OLNK_VERSION_STRING "0.3.1" /* x-release-please-version */
+#define OLNK_VERSION_PATCH  2       /* x-release-please-patch */
+#define OLNK_VERSION_STRING "0.3.2" /* x-release-please-version */
 
 #endif /* OPENLNK_VERSION_H */
