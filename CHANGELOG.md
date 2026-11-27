@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/joberthel/openlnk/compare/v0.3.0...v0.3.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **esp32:** use UINT32_C() to fix LP64 -Werror=conversion in release bundle ([b7bda72](https://github.com/joberthel/openlnk/commit/b7bda72b991a1f418cd0c898fb7e9c0a9ffdadcc))
+
 ## [0.3.0](https://github.com/joberthel/openlnk/compare/v0.2.0...v0.3.0) (2026-11-27)
 
 
