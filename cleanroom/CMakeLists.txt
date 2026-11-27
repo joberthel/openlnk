@@ -33,7 +33,7 @@ else()
 endif()
 
 if(OPENLNK_BUILD_DESKTOP)
-    add_executable(opensvr desktop/main_server.c)
+    add_executable(opensvr desktop/main_server.c desktop/vfat_dir.c)
     target_link_libraries(opensvr PRIVATE openlnk_static)
 
     add_executable(openlnk desktop/main_client.c)

@@ -32,6 +32,7 @@
 #include "openlnk/openlnk.h"
 #include "openlnk/server.h"
 #include "openlnk/storage.h"
+#include "vfat_dir.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,7 @@
 
 typedef struct {
     FILE *fp;
+    vfat_dir_drive_t *vfat;
     char path[512];
     uint32_t raw_sectors;
     uint32_t partition_lba;
@@ -247,9 +249,76 @@ static bool file_drive_attach(
     return true;
 }
 
+static bool file_drive_attach_dir(
+    file_drive_set_t *set,
+    uint8_t unit,
+    const char *dir_path,
+    bool read_only,
+    const char *volume_label
+) {
+    file_drive_slot_t *slot;
+    vfat_dir_drive_t *vfat;
+    olnk_drive_info_t info;
+    char size_str[10];
+    char trim_lbl[12];
+
+    if ((set == NULL) || (unit >= OLNK_MAX_DRIVES) || (dir_path == NULL)) {
+        return false;
+    }
+
+    vfat = vfat_dir_open(dir_path, read_only, volume_label);
+    if (vfat == NULL) {
+        return false;
+    }
+
+    slot = &set->slots[unit];
+    memset(slot, 0, sizeof(*slot));
+    slot->vfat = vfat;
+    slot->present = true;
+    slot->write_protected = read_only;
+    strncpy(slot->path, dir_path, sizeof(slot->path) - 1U);
+    (void)vfat_dir_get_info(vfat, &info);
+    slot->info = info;
+    slot->volume_sectors = info.total_sectors;
+
+    if ((uint8_t)(unit + 1U) > set->drive_count) {
+        set->drive_count = (uint8_t)(unit + 1U);
+    }
+
+    olnk_fat_format_size_string(info.total_sectors, info.bpb.bytes_per_sector, size_str);
+    olnk_label_trim_copy(trim_lbl, sizeof(trim_lbl), info.volume_label, 11U);
+    fprintf(
+        stderr,
+        "[opensvr] Unit %u (%c:): %s [VFAT-DIR] | sectors=%lu %s | fs=FAT16 label='%s' ser=%08lX%s\n",
+        (unsigned int)unit,
+        (char)('A' + (char)unit),
+        dir_path,
+        (unsigned long)info.total_sectors,
+        size_str,
+        trim_lbl,
+        (unsigned long)info.volume_serial,
+        read_only ? " [READ-ONLY]" : " [READ-WRITE]"
+    );
+    return true;
+}
+
+static bool file_drive_path_is_dir(const char *path) {
+#if !defined(_WIN32)
+    struct stat st;
+    return (path != NULL) && (stat(path, &st) == 0) && S_ISDIR(st.st_mode);
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 static void file_drive_set_close(file_drive_set_t *set) {
     uint8_t i;
     for (i = 0U; i < OLNK_MAX_DRIVES; ++i) {
+        if (set->slots[i].vfat != NULL) {
+            vfat_dir_close(set->slots[i].vfat);
+            set->slots[i].vfat = NULL;
+        }
         if (set->slots[i].fp != NULL) {
             fflush(set->slots[i].fp);
             fclose(set->slots[i].fp);
@@ -265,9 +334,12 @@ static uint8_t fset_drive_count(void *ud) {
 }
 
 static uint16_t fset_get_info(uint8_t unit, olnk_drive_info_t *out, void *ud) {
-    const file_drive_set_t *set = (const file_drive_set_t *)ud;
+    file_drive_set_t *set = (file_drive_set_t *)ud;
     if ((set == NULL) || (out == NULL) || (unit >= OLNK_MAX_DRIVES) || (!set->slots[unit].present)) {
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
+    }
+    if (set->slots[unit].vfat != NULL) {
+        return vfat_dir_get_info(set->slots[unit].vfat, out);
     }
     *out = set->slots[unit].info;
     return OLNK_DOS_STATUS_DONE;
@@ -280,11 +352,13 @@ static uint16_t fset_media_check(
     olnk_drive_info_t *out_info,
     void *ud
 ) {
-    const file_drive_set_t *set = (const file_drive_set_t *)ud;
-    (void)media_desc;
+    file_drive_set_t *set = (file_drive_set_t *)ud;
     if ((set == NULL) || (unit >= OLNK_MAX_DRIVES) || (!set->slots[unit].present)) {
         *out_ms = (uint8_t)OLNK_MEDIA_UNSURE;
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
+    }
+    if (set->slots[unit].vfat != NULL) {
+        return vfat_dir_media_check(set->slots[unit].vfat, media_desc, out_ms, out_info);
     }
     *out_info = set->slots[unit].info;
     *out_ms = (uint8_t)OLNK_MEDIA_UNCHANGED;
@@ -298,9 +372,11 @@ static uint16_t fset_build_bpb(
     void *ud
 ) {
     file_drive_set_t *set = (file_drive_set_t *)ud;
-    (void)media_desc;
     if ((set == NULL) || (unit >= OLNK_MAX_DRIVES) || (!set->slots[unit].present)) {
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
+    }
+    if (set->slots[unit].vfat != NULL) {
+        return vfat_dir_build_bpb(set->slots[unit].vfat, media_desc, out_bpb);
     }
     (void)file_drive_refresh_vbr(&set->slots[unit]);
     *out_bpb = set->slots[unit].info.bpb;
@@ -327,6 +403,9 @@ static uint16_t fset_read_sectors(
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
     }
     slot = &set->slots[unit];
+    if (slot->vfat != NULL) {
+        return vfat_dir_read_sectors(slot->vfat, start_lba, sector_count, out_buf, out_xfer);
+    }
     end_lba = start_lba + (uint32_t)sector_count;
     if ((end_lba < start_lba) || (end_lba > slot->volume_sectors)) {
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_SECTOR_NOT_FOUND);
@@ -363,6 +442,9 @@ static uint16_t fset_write_sectors(
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
     }
     slot = &set->slots[unit];
+    if (slot->vfat != NULL) {
+        return vfat_dir_write_sectors(slot->vfat, start_lba, sector_count, in_buf, out_xfer, verify);
+    }
     if (slot->write_protected) {
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_WRITE_PROTECT);
     }
@@ -403,6 +485,9 @@ static uint16_t fset_set_mid(uint8_t unit, const olnk_generic_ioctl_mid_t *mid, 
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_UNKNOWN_UNIT);
     }
     slot = &set->slots[unit];
+    if (slot->vfat != NULL) {
+        return vfat_dir_set_media_id(slot->vfat, mid);
+    }
     if (slot->write_protected) {
         return OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_WRITE_PROTECT);
     }
@@ -1066,11 +1151,14 @@ static void print_usage(void) {
     printf("  opensvr --version\n");
     printf("  opensvr --self-test\n");
     printf("  opensvr --port <tty/pty> --image <disk.vhd|disk.img> [options]\n");
-    printf("  opensvr --pipe <prefix>  --image <disk.vhd|disk.img> [options]\n");
+    printf("  opensvr --pipe <prefix>  --dir <folder> [options]\n");
     printf("Options:\n");
-    printf("  --drive <L>:<path>   Map disk image to explicit server letter (e.g. A:fdd.img C:hd.vhd)\n");
+    printf("  --image <path>       Attach RAW/VHD FAT12/FAT16 disk image (auto unit)\n");
+    printf("  --dir <folder>       Share host folder as Virtual FAT16 drive (read-write + live refresh)\n");
+    printf("  --drive <L>:<path>   Map image or folder to explicit server letter (e.g. C:~/dos_share)\n");
+    printf("  --label <name>       Optional DOS volume label for --dir shares (up to 11 chars)\n");
     printf("  --baud <rate>        Max negotiated baud (1200..115200, default 115200)\n");
-    printf("  --read-only          Write-protect all attached images (returns DOS error 0x8100)\n");
+    printf("  --read-only          Write-protect all attached drives (returns DOS error 0x8100)\n");
     printf("  --burst              Allow Burst (no-echo) frame reception (default: Echo-Paced)\n");
     printf("  --pace-us <us>       Per-byte TX delay in microseconds for --pipe mode (default: 0)\n");
     printf("  --verbose, -v        Log sync, baud negotiation, and RPC events to stderr\n");
@@ -1080,8 +1168,10 @@ int main(int argc, char **argv) {
     static file_drive_set_t drives;
     const char *port_path = NULL;
     const char *pipe_prefix = NULL;
+    const char *volume_label = NULL;
     const char *image_paths[OLNK_MAX_DRIVES];
     uint8_t image_units[OLNK_MAX_DRIVES];
+    bool image_is_dir[OLNK_MAX_DRIVES];
     size_t image_count = 0U;
     uint8_t next_auto_unit = 0U;
     uint32_t max_baud = 115200UL;
@@ -1115,8 +1205,18 @@ int main(int argc, char **argv) {
             if (image_count < OLNK_MAX_DRIVES) {
                 image_units[image_count] = next_auto_unit++;
                 image_paths[image_count] = argv[++i];
+                image_is_dir[image_count] = false;
                 image_count += 1U;
             }
+        } else if ((strcmp(argv[i], "--dir") == 0) && ((i + 1) < argc)) {
+            if (image_count < OLNK_MAX_DRIVES) {
+                image_units[image_count] = next_auto_unit++;
+                image_paths[image_count] = argv[++i];
+                image_is_dir[image_count] = true;
+                image_count += 1U;
+            }
+        } else if ((strcmp(argv[i], "--label") == 0) && ((i + 1) < argc)) {
+            volume_label = argv[++i];
         } else if ((strcmp(argv[i], "--drive") == 0) && ((i + 1) < argc)) {
             const char *spec = argv[++i];
             if ((spec[0] != '\0') && (spec[1] == ':') && (spec[2] != '\0')) {
@@ -1133,6 +1233,7 @@ int main(int argc, char **argv) {
                 if (image_count < OLNK_MAX_DRIVES) {
                     image_units[image_count] = u;
                     image_paths[image_count] = &spec[2];
+                    image_is_dir[image_count] = file_drive_path_is_dir(&spec[2]);
                     image_count += 1U;
                 }
             } else {
@@ -1166,12 +1267,15 @@ int main(int argc, char **argv) {
     }
 
     if (image_count == 0U) {
-        fprintf(stderr, "[opensvr] ERROR: Attach at least one disk image via --image or --drive.\n");
+        fprintf(stderr, "[opensvr] ERROR: Attach at least one drive via --dir, --image, or --drive.\n");
         return 2;
     }
 
     for (k = 0U; k < image_count; ++k) {
-        if (!file_drive_attach(&drives, image_units[k], image_paths[k], read_only)) {
+        bool ok = image_is_dir[k]
+                      ? file_drive_attach_dir(&drives, image_units[k], image_paths[k], read_only, volume_label)
+                      : file_drive_attach(&drives, image_units[k], image_paths[k], read_only);
+        if (!ok) {
             file_drive_set_close(&drives);
             return 1;
         }
