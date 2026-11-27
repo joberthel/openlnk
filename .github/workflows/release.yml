@@ -1,0 +1,291 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build-dos16:
+    name: Build MS-DOS 16-Bit (Open Watcom v2)
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Open Watcom v2 snapshot
+        id: cache-watcom
+        uses: actions/cache@v4
+        with:
+          path: /opt/watcom
+          key: open-watcom-v2-linux-x64-v1
+
+      - name: Install Open Watcom v2
+        if: steps.cache-watcom.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/watcom
+          curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/ow-snapshot.tar.xz" \
+            | sudo tar -xJf - -C /opt/watcom
+
+      - name: Cross-compile & verify 16-bit DOS binaries
+        env:
+          WATCOM: /opt/watcom
+          INCLUDE: /opt/watcom/h
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          export PATH="$WATCOM/binl64:$PATH"
+          make -C cleanroom/dos -f Makefile.watcom
+          python3 tools/ci/verify_dos_binaries.py --build-dir cleanroom/dos/build
+          python3 -c '
+          import os
+          from pathlib import Path
+          ver = os.environ["RELEASE_VERSION"].encode("ascii")
+          checks = (
+              ("cleanroom/dos/build/OPENSVR.EXE", b"OPENSVR " + ver),
+              ("cleanroom/dos/build/OPENLNK.EXE", b"OPENLNK " + ver),
+              ("cleanroom/dos/build/OPENLNK.SYS", b"OPENLNK.SYS v" + ver),
+          )
+          for path, needle in checks:
+              raw = Path(path).read_bytes()
+              assert needle in raw, f"Expected embedded version string {needle!r} in {path}"
+              print(f"Verified embedded version in {path}: {needle.decode()}")
+          '
+
+      - name: Package DOS 16-bit release archives
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          ver = os.environ["RELEASE_VERSION"]
+          bdir = Path("cleanroom/dos/build")
+          dist = Path("dist")
+          dist.mkdir(parents=True, exist_ok=True)
+
+          watcom_banner = (bdir / "OPENSVR.MAP").read_text(encoding="utf-8", errors="replace").splitlines()[0].strip()
+
+          readme_dos = (
+              f"OpenLNK {ver} - 16-bit Real-Mode MS-DOS Binaries (8086/8088+)\n"
+              f"=============================================================\n\n"
+              f"Files included:\n"
+              f"  OPENLNK.SYS  MS-DOS 5.0/6.22 Block Device Driver (CONFIG.SYS)\n"
+              f"  OPENLNK.EXE  MS-DOS 16-bit Client CLI\n"
+              f"  OPENSVR.EXE  MS-DOS 16-bit Server\n"
+              f"  LICENSE.TXT  MIT License\n\n"
+              f"Quick Usage:\n"
+              f"  CONFIG.SYS : DEVICE=C:\\OPENLNK\\OPENLNK.SYS /COM1 /BAUD:115200 /DRIVES:4\n"
+              f"  Server     : OPENSVR C: /COM1 /BAUD:115200\n"
+              f"  Client CLI : OPENLNK /COM1 /DIR\n"
+              f"               OPENLNK /COM1 /GET README.TXT\n\n"
+              f"Toolchain:\n"
+              f"  {watcom_banner}\n"
+          ).replace("\n", "\r\n").encode("ascii")
+
+          license_dos = (
+              Path("LICENSE").read_text(encoding="utf-8").replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+          )
+
+          dos_zip = dist / f"openlnk-{tag}-dos16.zip"
+          with zipfile.ZipFile(dos_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+              for fname in ("OPENSVR.EXE", "OPENLNK.EXE", "OPENLNK.SYS"):
+                  zf.write(bdir / fname, arcname=fname)
+              zf.writestr("README.TXT", readme_dos)
+              zf.writestr("LICENSE.TXT", license_dos)
+
+          maps_zip = dist / f"openlnk-{tag}-dos16-maps.zip"
+          with zipfile.ZipFile(maps_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+              for fname in ("OPENSVR.MAP", "OPENLNKX.MAP", "OPENLNK.MAP"):
+                  zf.write(bdir / fname, arcname=fname)
+
+          print(f"Created {dos_zip} ({dos_zip.stat().st_size} B)")
+          print(f"Created {maps_zip} ({maps_zip.stat().st_size} B)")
+          PY
+
+      - name: Upload DOS 16-bit release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dos16
+          path: dist/openlnk-*.zip
+          if-no-files-found: error
+
+  build-desktop:
+    name: Build Desktop (${{ matrix.target }})
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: macos-universal
+            os: macos-latest
+            archive: tar.gz
+          - target: windows-x86_64
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cmake -S cleanroom -B cleanroom/build
+          elif [ "${{ matrix.target }}" = "macos-universal" ]; then
+            cmake -S cleanroom -B cleanroom/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          else
+            cmake -S cleanroom -B cleanroom/build -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build libopenlnk & desktop CLIs
+        run: cmake --build cleanroom/build --config Release
+
+      - name: Verify macOS Universal Mach-O slices
+        if: ${{ matrix.target == 'macos-universal' }}
+        run: |
+          for bin in cleanroom/build/opensvr cleanroom/build/openlnk; do
+            archs="$(lipo -archs "$bin")"
+            echo "$bin: $archs"
+            echo "$archs" | grep -qw "arm64"
+            echo "$archs" | grep -qw "x86_64"
+          done
+
+      - name: Run C99 unit tests
+        run: ctest --test-dir cleanroom/build -C Release --output-on-failure
+
+      - name: Run CLI self-tests & version checks
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            OPENSVR="./cleanroom/build/Release/opensvr.exe"
+            OPENLNK="./cleanroom/build/Release/openlnk.exe"
+          else
+            OPENSVR="./cleanroom/build/opensvr"
+            OPENLNK="./cleanroom/build/openlnk"
+          fi
+          "$OPENSVR" --self-test
+          "$OPENLNK" --self-test
+          "$OPENSVR" --version | tee /dev/stderr | grep -Fq "opensvr ${RELEASE_VERSION} "
+          "$OPENLNK" --version | tee /dev/stderr | grep -Fq "openlnk ${RELEASE_VERSION} "
+
+      - name: Package Unix archive
+        if: ${{ matrix.archive == 'tar.gz' }}
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          ARCHIVE_DIR="openlnk-${TAG_NAME}-${TARGET}"
+          mkdir -p "stage/${ARCHIVE_DIR}" dist
+          cp cleanroom/build/opensvr cleanroom/build/openlnk "stage/${ARCHIVE_DIR}/"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            strip "stage/${ARCHIVE_DIR}/opensvr" "stage/${ARCHIVE_DIR}/openlnk"
+          fi
+          cp README.md LICENSE "stage/${ARCHIVE_DIR}/"
+          tar -czf "dist/${ARCHIVE_DIR}.tar.gz" -C stage "${ARCHIVE_DIR}"
+          ls -lh "dist/${ARCHIVE_DIR}.tar.gz"
+
+      - name: Package Windows archive
+        if: ${{ matrix.archive == 'zip' }}
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $archiveDir = "openlnk-$($env:TAG_NAME)-$($env:TARGET)"
+          New-Item -ItemType Directory -Force -Path "stage/$archiveDir", "dist" | Out-Null
+          Copy-Item "cleanroom/build/Release/opensvr.exe" "stage/$archiveDir/"
+          Copy-Item "cleanroom/build/Release/openlnk.exe" "stage/$archiveDir/"
+          Copy-Item "README.md", "LICENSE" "stage/$archiveDir/"
+          Compress-Archive -Path "stage/$archiveDir" -DestinationPath "dist/$archiveDir.zip" -Force
+          Get-Item "dist/$archiveDir.zip"
+
+      - name: Upload desktop release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-${{ matrix.target }}
+          path: dist/openlnk-*
+          if-no-files-found: error
+
+  publish-release:
+    name: Checksums, Attestation & Publish
+    needs: [release-please, build-dos16, build-desktop]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd release-assets
+          LC_ALL=C sha256sum openlnk-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate SLSA build provenance attestations
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/*
+
+      - name: Upload assets & publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG_NAME" release-assets/* --clobber
+          gh release edit "$TAG_NAME" --draft=false

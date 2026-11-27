@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -23,6 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from analysis import setup_ghidra
 from analysis.verifiers import verify_crc
 from tools.ci import check_cleanroom_isolation as isolation
+from tools.ci import verify_dos_binaries
 from tools.sniffer import serial_mitm
 
 
@@ -218,6 +221,59 @@ class TestCleanroomIsolation(unittest.TestCase):
             isolation.check_dual_agent_boundary(["specs/interlnk_wire.ksy", "cleanroom/src/openlnk.c"]),
             [],
         )
+
+
+class TestReleaseMetadataAndDosVerifier(unittest.TestCase):
+    def test_release_version_files_are_synchronized(self) -> None:
+        manifest = json.loads((REPO_ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
+        version = manifest["."]
+        major, minor, patch = (int(part) for part in version.split("."))
+
+        self.assertEqual((REPO_ROOT / "version.txt").read_text(encoding="utf-8").strip(), version)
+
+        header = (REPO_ROOT / "cleanroom/include/openlnk/version.h").read_text(encoding="utf-8")
+        self.assertRegex(header, rf"#define\s+OLNK_VERSION_MAJOR\s+{major}\b")
+        self.assertRegex(header, rf"#define\s+OLNK_VERSION_MINOR\s+{minor}\b")
+        self.assertRegex(header, rf"#define\s+OLNK_VERSION_PATCH\s+{patch}\b")
+        self.assertIn(f'#define OLNK_VERSION_STRING "{version}"', header)
+
+        cmake = (REPO_ROOT / "cleanroom/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertRegex(cmake, rf"project\(libopenlnk VERSION {re.escape(version)} LANGUAGES C\)")
+
+        idf = (REPO_ROOT / "esp32/idf_component.yml").read_text(encoding="utf-8")
+        self.assertRegex(idf, re.compile(rf'^version:\s*"{re.escape(version)}"', re.M))
+
+        pio = json.loads((REPO_ROOT / "esp32/library.json").read_text(encoding="utf-8"))
+        self.assertEqual(pio["version"], version)
+
+        arduino = (REPO_ROOT / "esp32/library.properties").read_text(encoding="utf-8")
+        self.assertRegex(arduino, re.compile(rf"^version={re.escape(version)}$", re.M))
+
+    def test_verify_dos_binaries_validates_headers_and_budgets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bdir = Path(tmp)
+            (bdir / "OPENSVR.EXE").write_bytes(b"MZ" + b"\x00" * 1022)
+            (bdir / "OPENSVR.MAP").write_text("Open Watcom Linker\n", encoding="utf-8")
+            (bdir / "OPENLNK.EXE").write_bytes(b"MZ" + b"\x00" * 1022)
+            (bdir / "OPENLNKX.MAP").write_text("Open Watcom Linker\n", encoding="utf-8")
+
+            sys_hdr = struct.pack("<IHHHB", 0xFFFFFFFF, 0x2842, 0x0012, 0x001D, 0) + b"OPENLNK"
+            sys_body = sys_hdr + b"\x00" * (256 - len(sys_hdr))
+            (bdir / "OPENLNK.SYS").write_bytes(sys_body)
+            (bdir / "OPENLNK.MAP").write_text(
+                "Open Watcom Linker\n"
+                "0100  _sys_bss_start\n"
+                "0400  _sys_resident_end\n",
+                encoding="utf-8",
+            )
+
+            lines = verify_dos_binaries.verify_dos_binaries(bdir)
+            self.assertEqual(len(lines), 3)
+
+            # Reject accidental clibs.lib linkage
+            (bdir / "OPENSVR.MAP").write_text("clibs.lib(cstart)\n", encoding="utf-8")
+            with self.assertRaises(AssertionError):
+                verify_dos_binaries.verify_dos_binaries(bdir)
 
 
 if __name__ == "__main__":

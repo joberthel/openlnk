@@ -39,6 +39,7 @@ tests/harness/parsers/*.h
 
 # Build outputs
 build/
+dist/
 cleanroom/build/
 cleanroom/dos/build/
 *.o
