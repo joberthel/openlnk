@@ -931,6 +931,7 @@ static void test_openlnk_sys_rh_marshalling_over_16550a(void) {
     for (u = 0U; u < 4U; ++u) {
         uint16_t entry_off = olnk_read_u16_le(&g_sim_mem.ram[sim_lin(bpb_arr_seg, (uint16_t)(bpb_arr_off + (uint16_t)(u * 2U)))]);
         olnk_dos_bpb_t decoded;
+        memset(&decoded, 0, sizeof(decoded));
         CHECK(olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_arr_seg, entry_off)], OLNK_LEN_DOS_BPB, &decoded) == OLNK_OK,
               "RH INIT BPB array entry decodes cleanly");
         CHECK((decoded.bytes_per_sector == 512U) && (decoded.sectors_per_cluster == 2U) &&
@@ -974,6 +975,7 @@ static void test_openlnk_sys_rh_marshalling_over_16550a(void) {
     bpb_seg = olnk_read_u16_le(&rh[20]);
     {
         olnk_dos_bpb_t live_bpb;
+        memset(&live_bpb, 0, sizeof(live_bpb));
         CHECK((bpb_seg == drv_seg) &&
                   (olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_seg, bpb_off)], OLNK_LEN_DOS_BPB, &live_bpb) == OLNK_OK),
               "RH BUILD_BPB far pointer at rh+18 decodes live packed BPB");
@@ -1183,6 +1185,7 @@ static void test_openlnk_sys_rh_marshalling_over_16550a(void) {
     {
         uint16_t entry0 = olnk_read_u16_le(&g_sim_mem.ram[sim_lin(bpb_arr_seg, bpb_arr_off)]);
         olnk_dos_bpb_t boot_bpb;
+        memset(&boot_bpb, 0, sizeof(boot_bpb));
         CHECK(olnk_decode_dos_bpb(&g_sim_mem.ram[sim_lin(bpb_arr_seg, entry0)], OLNK_LEN_DOS_BPB, &boot_bpb) == OLNK_OK,
               "RH INIT online BPB array entry 0 decodes");
         CHECK((boot_bpb.bytes_per_sector == 512U) && (boot_bpb.total_sectors_16 == SIM_DISK_SECTORS),

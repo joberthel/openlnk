@@ -100,7 +100,9 @@ static void dos_stdout_raw(const char *data, size_t len) {
     if (g_stdout_sink != NULL) {
         g_stdout_sink(data, len, g_stdout_sink_ctx);
     } else {
-        (void)fwrite(data, 1U, len, stdout);
+        if (fwrite(data, 1U, len, stdout) != len) {
+            clearerr(stdout);
+        }
     }
 #endif
 }

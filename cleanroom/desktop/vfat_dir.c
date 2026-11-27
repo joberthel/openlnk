@@ -227,6 +227,25 @@ static uint64_t vfat_now_ms(void) {
     return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
 }
 
+static void vfat_copy_str(char *dst, size_t dst_cap, const char *src) {
+    size_t len;
+    if ((dst == NULL) || (dst_cap == 0U)) {
+        return;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+    len = strlen(src);
+    if (len >= dst_cap) {
+        len = dst_cap - 1U;
+    }
+    if (len > 0U) {
+        memcpy(dst, src, len);
+    }
+    dst[len] = '\0';
+}
+
 static uint64_t fnv1a_update(uint64_t h, const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
     size_t i;
@@ -492,8 +511,8 @@ static size_t list_host_dir(const char *dir_path, host_entry_t **out_list) {
         }
 
         memset(&list[count], 0, sizeof(host_entry_t));
-        strncpy(list[count].name, de->d_name, sizeof(list[count].name) - 1U);
-        strncpy(list[count].full_path, child, sizeof(list[count].full_path) - 1U);
+        vfat_copy_str(list[count].name, sizeof(list[count].name), de->d_name);
+        vfat_copy_str(list[count].full_path, sizeof(list[count].full_path), child);
         list[count].is_dir = S_ISDIR(st.st_mode);
         list[count].size = (st.st_size > 0) ? (uint32_t)st.st_size : 0UL;
         list[count].mtime = st.st_mtime;
@@ -624,8 +643,11 @@ static uint32_t vfat_add_backing_file(vfat_dir_drive_t *drv, const char *path, u
         drv->backing_files = nf;
         drv->backing_file_cap = new_cap;
     }
-    strncpy(drv->backing_files[drv->backing_file_count].host_path, path, VFAT_MAX_PATH - 1U);
-    drv->backing_files[drv->backing_file_count].host_path[VFAT_MAX_PATH - 1U] = '\0';
+    vfat_copy_str(
+        drv->backing_files[drv->backing_file_count].host_path,
+        sizeof(drv->backing_files[drv->backing_file_count].host_path),
+        path
+    );
     drv->backing_files[drv->backing_file_count].size = size;
     return (uint32_t)(drv->backing_file_count++);
 }
@@ -653,8 +675,8 @@ static vfat_tracked_node_t *vfat_add_tracked(
     }
     node = &drv->tracked[drv->tracked_count++];
     memset(node, 0, sizeof(*node));
-    strncpy(node->dos_path, dos_path, sizeof(node->dos_path) - 1U);
-    strncpy(node->host_path, host_path, sizeof(node->host_path) - 1U);
+    vfat_copy_str(node->dos_path, sizeof(node->dos_path), dos_path);
+    vfat_copy_str(node->host_path, sizeof(node->host_path), host_path);
     node->is_dir = is_dir;
     node->first_cluster = first_cluster;
     node->file_size = file_size;
@@ -961,7 +983,9 @@ static void vfat_read_clean_cluster(vfat_dir_drive_t *drv, uint16_t cluster, uin
             FILE *fp = fopen(drv->backing_files[bk->file_index].host_path, "rb");
             if (fp != NULL) {
                 if (fseeko(fp, (off_t)bk->file_offset, SEEK_SET) == 0) {
-                    (void)fread(out_buf, 1U, drv->cluster_bytes, fp);
+                    if ((fread(out_buf, 1U, drv->cluster_bytes, fp) == 0U) && ferror(fp)) {
+                        memset(out_buf, 0, drv->cluster_bytes);
+                    }
                 }
                 fclose(fp);
             }
@@ -1199,8 +1223,7 @@ static void vfat_sync_walk_dir(
             tn = vfat_find_tracked(drv, dos_rel);
 
             if (tn != NULL) {
-                strncpy(host_child, tn->host_path, sizeof(host_child) - 1U);
-                host_child[sizeof(host_child) - 1U] = '\0';
+                vfat_copy_str(host_child, sizeof(host_child), tn->host_path);
             } else {
                 int n = snprintf(host_child, sizeof(host_child), "%s/%s", host_dir, dos_comp);
                 if ((n <= 0) || ((size_t)n >= sizeof(host_child))) {
@@ -1352,7 +1375,7 @@ vfat_dir_drive_t *vfat_dir_open(
         return NULL;
     }
 
-    strncpy(drv->root_path, root_path, sizeof(drv->root_path) - 1U);
+    vfat_copy_str(drv->root_path, sizeof(drv->root_path), root_path);
     /* Strip trailing slashes (except "/") */
     {
         size_t rlen = strlen(drv->root_path);

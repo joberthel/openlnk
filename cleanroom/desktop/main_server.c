@@ -225,7 +225,7 @@ static bool file_drive_attach(
     }
 
     slot->present = true;
-    strncpy(slot->path, path, sizeof(slot->path) - 1U);
+    snprintf(slot->path, sizeof(slot->path), "%s", path);
     if ((uint8_t)(unit + 1U) > set->drive_count) {
         set->drive_count = (uint8_t)(unit + 1U);
     }
@@ -277,7 +277,7 @@ static bool file_drive_attach_dir(
     slot->vfat = vfat;
     slot->present = true;
     slot->write_protected = read_only;
-    strncpy(slot->path, dir_path, sizeof(slot->path) - 1U);
+    snprintf(slot->path, sizeof(slot->path), "%s", dir_path);
     (void)vfat_dir_get_info(vfat, &info);
     slot->info = info;
     slot->volume_sectors = info.total_sectors;
@@ -1147,7 +1147,8 @@ static int run_posix_server(
  * ========================================================================= */
 
 static void print_usage(void) {
-    printf("opensvr (libopenlnk 0.2.0 — MS-DOS 6.22 INTERSVR clean-room server)\n");
+    printf("opensvr (libopenlnk %s — MS-DOS 6.22 INTERSVR clean-room server)\n",
+           OLNK_VERSION_STRING);
     printf("Usage:\n");
     printf("  opensvr --version\n");
     printf("  opensvr --self-test\n");

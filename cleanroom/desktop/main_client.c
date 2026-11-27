@@ -1284,7 +1284,8 @@ static int cmd_shell(olnk_client_t *cli, uint8_t default_unit) {
  * ========================================================================= */
 
 static void print_usage(void) {
-    printf("openlnk (libopenlnk 0.2.0 — MS-DOS 6.22 INTERLNK clean-room client)\n");
+    printf("openlnk (libopenlnk %s — MS-DOS 6.22 INTERLNK clean-room client)\n",
+           OLNK_VERSION_STRING);
     printf("Usage:\n");
     printf("  openlnk --version\n");
     printf("  openlnk --self-test\n");
