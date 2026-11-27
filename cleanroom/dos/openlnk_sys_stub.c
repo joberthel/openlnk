@@ -10,6 +10,7 @@
  *     and Generic IOCTL 08h/66h & 08h/46h.
  */
 #include "openlnk_sys.h"
+#include "openlnk/version.h"
 
 #include <string.h>
 
@@ -305,7 +306,7 @@ static void sys_format_init_banner(
     bool connected
 ) {
     size_t pos = 0U;
-    pos = banner_append_str(out, pos, cap, "OPENLNK.SYS v0.2: COM");
+    pos = banner_append_str(out, pos, cap, "OPENLNK.SYS v" OLNK_VERSION_STRING ": COM");
     pos = banner_append_u32(out, pos, cap, (uint32_t)com_num);
     pos = banner_append_str(out, pos, cap, " ");
     pos = banner_append_u32(out, pos, cap, max_baud);

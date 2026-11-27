@@ -11,6 +11,7 @@
 #include "dos_hal_io.h"
 #include "dos_hal_uart.h"
 #include "openlnk/client.h"
+#include "openlnk/version.h"
 
 #include <string.h>
 
@@ -331,7 +332,7 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
 
 static void print_usage(void) {
     olnk_dos_puts(
-        "OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode MS-DOS 6.22 client)\n"
+        "OPENLNK " OLNK_VERSION_STRING " (libopenlnk 16-bit Real-Mode MS-DOS 6.22 client)\n"
         "Usage:\n"
         "  OPENLNK [/COM1../COM4] [/BAUD:rate]            Show remote drives\n"
         "  OPENLNK [/COM1] /DIR [C:]                      List remote root directory\n"
@@ -431,7 +432,7 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
     (void)dos_cmd_info;
     (void)dos_cmd_dir;
     (void)dos_cmd_get;
-    olnk_dos_puts("OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode client ready)\n");
+    olnk_dos_puts("OPENLNK " OLNK_VERSION_STRING " (libopenlnk 16-bit Real-Mode client ready)\n");
 #endif
     return 0;
 }

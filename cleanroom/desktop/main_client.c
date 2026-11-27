@@ -23,6 +23,7 @@
 #include "openlnk/client.h"
 #include "openlnk/server.h"
 #include "openlnk/storage.h"
+#include "openlnk/version.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -1330,7 +1331,8 @@ int main(int argc, char **argv) {
 
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--version") == 0) {
-            printf("openlnk 0.2.0 (libopenlnk C99 zero-alloc MS-DOS 6.22 client)\n");
+            printf("openlnk %s (libopenlnk C99 zero-alloc MS-DOS 6.22 client)\n",
+                   OLNK_VERSION_STRING);
             return 0;
         }
         if (strcmp(argv[i], "--self-test") == 0) {

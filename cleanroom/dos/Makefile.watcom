@@ -100,10 +100,10 @@ $(BUILD_DIR)/dos_hal_io.obj: dos_hal_io.c dos_hal_io.h
 $(BUILD_DIR)/libolnk.lib: $(CORE_OBJS)
 	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/openlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj +$(BUILD_DIR)/server.obj +$(BUILD_DIR)/client.obj
 
-$(BUILD_DIR)/opensvr_main.obj: opensvr_main.c dos_hal_uart.h dos_hal_disk.h dos_hal_io.h
+$(BUILD_DIR)/opensvr_main.obj: opensvr_main.c dos_hal_uart.h dos_hal_disk.h dos_hal_io.h ../include/openlnk/version.h
 	$(CC) $(CFLAGS) -fo=$@ opensvr_main.c
 
-$(BUILD_DIR)/openlnk_main.obj: openlnk_main.c dos_hal_uart.h dos_hal_io.h
+$(BUILD_DIR)/openlnk_main.obj: openlnk_main.c dos_hal_uart.h dos_hal_io.h ../include/openlnk/version.h
 	$(CC) $(CFLAGS) -fo=$@ openlnk_main.c
 
 $(BUILD_DIR)/OPENSVR.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/opensvr_main.obj $(DOS_HAL_OBJS) $(BUILD_DIR)/libolnk.lib
@@ -116,7 +116,7 @@ $(BUILD_DIR)/OPENLNK.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/openlnk_main.obj $(BUILD_
 $(BUILD_DIR)/openlnk_sys_entry.obj: openlnk_sys_entry.asm
 	$(AS) $(ASFLAGS) -fo=$@ openlnk_sys_entry.asm
 
-$(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h
+$(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h ../include/openlnk/version.h
 	$(CC) $(CFLAGS) -fo=$@ openlnk_sys_stub.c
 
 $(BUILD_DIR)/OPENLNK.SYS: $(SYS_OBJS)

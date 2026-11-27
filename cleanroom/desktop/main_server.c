@@ -32,6 +32,7 @@
 #include "openlnk/openlnk.h"
 #include "openlnk/server.h"
 #include "openlnk/storage.h"
+#include "openlnk/version.h"
 #include "vfat_dir.h"
 
 #include <stdio.h>
@@ -1187,7 +1188,8 @@ int main(int argc, char **argv) {
 
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--version") == 0) {
-            printf("opensvr 0.2.0 (libopenlnk C99 zero-alloc MS-DOS 6.22 protocol)\n");
+            printf("opensvr %s (libopenlnk C99 zero-alloc MS-DOS 6.22 protocol)\n",
+                   OLNK_VERSION_STRING);
             return 0;
         }
         if (strcmp(argv[i], "--self-test") == 0) {

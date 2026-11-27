@@ -11,6 +11,7 @@
 #include "dos_hal_io.h"
 #include "dos_hal_uart.h"
 #include "openlnk/server.h"
+#include "openlnk/version.h"
 
 #include <string.h>
 
@@ -42,7 +43,7 @@ static void on_dos_server_event(const char *name, uint32_t a1, uint32_t a2, void
 
 static void print_dos_usage(void) {
     olnk_dos_puts(
-        "OPENSVR 0.2.0 (libopenlnk 16-bit Real-Mode MS-DOS 6.22 server)\n"
+        "OPENSVR " OLNK_VERSION_STRING " (libopenlnk 16-bit Real-Mode MS-DOS 6.22 server)\n"
         "Usage: OPENSVR [drives...] [/COM1../COM4] [/BAUD:rate] [/RO] [/BURST]\n"
         "Example: OPENSVR C: /COM1 /BAUD:115200\n"
     );
@@ -120,7 +121,7 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
     g_dos_server.idle_disconnect_ms = 3000UL;
     olnk_server_set_event_callback(&g_dos_server, on_dos_server_event, NULL);
 
-    olnk_dos_puts("OPENSVR 0.2.0 ready on COM");
+    olnk_dos_puts("OPENSVR " OLNK_VERSION_STRING " ready on COM");
     olnk_dos_put_u32((uint32_t)com_num);
     olnk_dos_puts(" (0x");
     olnk_dos_put_hex16(g_dos_uart.io_base);

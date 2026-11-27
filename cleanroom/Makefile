@@ -17,10 +17,10 @@ all: libopenlnk.a opensvr openlnk openlnk-vector-check test_libopenlnk test_dos_
 libopenlnk.a: $(CORE_OBJS)
 	$(AR) rcs $@ $(CORE_OBJS)
 
-opensvr: desktop/main_server.c desktop/vfat_dir.c libopenlnk.a
+opensvr: desktop/main_server.c desktop/vfat_dir.c include/openlnk/version.h libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) desktop/main_server.c desktop/vfat_dir.c libopenlnk.a -o $@
 
-openlnk: desktop/main_client.c libopenlnk.a
+openlnk: desktop/main_client.c include/openlnk/version.h libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) desktop/main_client.c libopenlnk.a -o $@
 
 openlnk-vector-check: desktop/vector_check.c libopenlnk.a
