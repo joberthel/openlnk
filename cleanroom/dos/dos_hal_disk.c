@@ -100,6 +100,32 @@ static uint16_t dos_get_ds(void);
 #pragma aux dos_get_ds = \
     "mov ax, ds"         \
     value [ax];
+
+/*
+ * MS-DOS 3.2+ Generic IOCTL Get Device Parameters (INT 21h AX=440Dh CX=0860h)
+ * and Get Media ID (CX=0866h): returns 1 on CF=0 (success), 0 on CF=1 (error).
+ */
+static uint8_t watcom_ioctl_get_dev_params(uint16_t drive_1based, void *buf);
+#pragma aux watcom_ioctl_get_dev_params = \
+    "mov ax, 440dh"                       \
+    "mov cx, 0860h"                       \
+    "int 21h"                             \
+    "sbb al, al"                          \
+    "inc al"                              \
+    parm [bx] [dx]                        \
+    value [al]                            \
+    modify [ax cx];
+
+static uint8_t watcom_ioctl_get_media_id(uint16_t drive_1based, void *buf);
+#pragma aux watcom_ioctl_get_media_id = \
+    "mov ax, 440dh"                     \
+    "mov cx, 0866h"                     \
+    "int 21h"                           \
+    "sbb al, al"                        \
+    "inc al"                            \
+    parm [bx] [dx]                      \
+    value [al]                          \
+    modify [ax cx];
 #endif /* __WATCOMC__ && __DOS__ */
 
 static uint16_t hw_abs_read(
@@ -174,8 +200,95 @@ static uint16_t hw_abs_write(
 #endif
 }
 
+static bool is_pow2_u16(uint16_t v) {
+    return (v != 0U) && ((v & (uint16_t)(v - 1U)) == 0U);
+}
+
+static bool is_pow2_u8(uint8_t v) {
+    return (v != 0U) && ((v & (uint8_t)(v - 1U)) == 0U);
+}
+
+/*
+ * Populate olnk_drive_info_t from a validated 25-byte MS-DOS BPB (used for
+ * non-bootable volumes such as RAMDRIVE.SYS "RDV 1.20" that omit 0x55 0xAA
+ * or use a 19-byte DOS 3.x BPB, as well as INT 21h 440Dh/0860h fallback).
+ */
+static bool fill_drive_info_from_bpb(const olnk_dos_bpb_t *in_bpb, olnk_drive_info_t *out) {
+    olnk_dos_bpb_t bpb = *in_bpb;
+    uint32_t total_sec;
+    uint32_t root_sec;
+    uint32_t data_start;
+    uint32_t data_sec;
+    uint32_t clusters;
+
+    if ((bpb.bytes_per_sector < 128U) || (bpb.bytes_per_sector > 4096U) ||
+        (!is_pow2_u16(bpb.bytes_per_sector)) || (!is_pow2_u8(bpb.sectors_per_cluster)) ||
+        (bpb.reserved_sectors == 0U) || (bpb.num_fats == 0U) || (bpb.num_fats > 2U) ||
+        (bpb.root_entries == 0U) || (bpb.sectors_per_fat == 0U) ||
+        (bpb.media_descriptor < 0xF0U)) {
+        return false;
+    }
+
+    total_sec = (bpb.total_sectors_16 != 0U)
+                    ? (uint32_t)bpb.total_sectors_16
+                    : bpb.total_sectors_32;
+    if (total_sec == 0UL) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->bpb = bpb;
+    out->total_sectors = total_sec;
+    out->drive_attrs = OLNK_DRIVE_ATTR_DEFAULT;
+    out->present = true;
+    out->ready = true;
+    out->removable = (bpb.media_descriptor != 0xF8U);
+
+    root_sec = ((uint32_t)bpb.root_entries * 32UL + (uint32_t)bpb.bytes_per_sector - 1UL) /
+               (uint32_t)bpb.bytes_per_sector;
+    data_start = (uint32_t)bpb.reserved_sectors +
+                 ((uint32_t)bpb.num_fats * (uint32_t)bpb.sectors_per_fat) + root_sec;
+    data_sec = (total_sec > data_start) ? (total_sec - data_start) : 0UL;
+    clusters = data_sec / (uint32_t)bpb.sectors_per_cluster;
+
+    memcpy(out->volume_label, "NO NAME    ", 11U);
+    out->volume_label[11] = '\0';
+    memcpy(out->filesystem_type, (clusters < 4085UL) ? "FAT12   " : "FAT16   ", 8U);
+    out->filesystem_type[8] = '\0';
+    return true;
+}
+
+static bool parse_relaxed_dos_vbr(const uint8_t *vbr, olnk_drive_info_t *out) {
+    olnk_dos_bpb_t bpb;
+
+    if ((vbr[0] != 0xEBU) && (vbr[0] != 0xE9U)) {
+        return false;
+    }
+    if (olnk_decode_dos_bpb(&vbr[11], OLNK_LEN_DOS_BPB, &bpb) != OLNK_OK) {
+        return false;
+    }
+    /* DOS 3.x / RAMDRIVE.SYS 19-byte BPB places boot code at offset 0x1E..0x23 */
+    if ((bpb.total_sectors_16 != 0U) && (vbr[38] != 0x29U)) {
+        bpb.hidden_sectors = (uint32_t)olnk_read_u16_le(&vbr[28]);
+        bpb.total_sectors_32 = 0UL;
+    }
+    if (!fill_drive_info_from_bpb(&bpb, out)) {
+        return false;
+    }
+    if (vbr[38] == 0x29U) {
+        out->volume_serial = olnk_read_u32_le(&vbr[39]);
+        memcpy(out->volume_label, &vbr[43], 11U);
+        out->volume_label[11] = '\0';
+        memcpy(out->filesystem_type, &vbr[54], 8U);
+        out->filesystem_type[8] = '\0';
+    }
+    return true;
+}
+
 static uint16_t probe_unit_vbr(olnk_dos_disk_set_t *set, uint8_t unit) {
     uint16_t st = hw_abs_read(set, unit, 0UL, 1U, set->vbr_scratch);
+    bool parsed = false;
+
     if ((st & OLNK_DOS_STATUS_ERROR) != 0U) {
         set->info[unit].present = true;
         set->info[unit].ready = false;
@@ -184,7 +297,42 @@ static uint16_t probe_unit_vbr(olnk_dos_disk_set_t *set, uint8_t unit) {
         return st;
     }
 
-    if (!olnk_fat_parse_vbr(set->vbr_scratch, &set->info[unit])) {
+    if (olnk_fat_parse_vbr(set->vbr_scratch, &set->info[unit])) {
+        parsed = true;
+    }
+#if defined(__WATCOMC__) && defined(__DOS__)
+    if (!parsed) {
+        uint8_t dp_buf[64];
+        olnk_dos_bpb_t ioctl_bpb;
+        memset(dp_buf, 0, sizeof(dp_buf));
+        dp_buf[0] = 0x01U; /* Current medium BPB */
+        if ((watcom_ioctl_get_dev_params((uint16_t)(unit + 1U), dp_buf) != 0U) &&
+            (olnk_decode_dos_bpb(&dp_buf[7], OLNK_LEN_DOS_BPB, &ioctl_bpb) == OLNK_OK)) {
+            if (ioctl_bpb.total_sectors_16 != 0U) {
+                ioctl_bpb.total_sectors_32 = 0UL;
+            }
+            if (fill_drive_info_from_bpb(&ioctl_bpb, &set->info[unit])) {
+                uint8_t mid_buf[OLNK_LEN_GENERIC_IOCTL_MID];
+                olnk_generic_ioctl_mid_t mid;
+                memset(mid_buf, 0, sizeof(mid_buf));
+                if ((watcom_ioctl_get_media_id((uint16_t)(unit + 1U), mid_buf) != 0U) &&
+                    (olnk_decode_generic_ioctl_mid(mid_buf, sizeof(mid_buf), &mid) == OLNK_OK)) {
+                    set->info[unit].volume_serial = mid.serial_number;
+                    memcpy(set->info[unit].volume_label, mid.volume_label, 11U);
+                    set->info[unit].volume_label[11] = '\0';
+                    memcpy(set->info[unit].filesystem_type, mid.filesystem_type, 8U);
+                    set->info[unit].filesystem_type[8] = '\0';
+                }
+                parsed = true;
+            }
+        }
+    }
+#endif
+    if (!parsed) {
+        parsed = parse_relaxed_dos_vbr(set->vbr_scratch, &set->info[unit]);
+    }
+
+    if (!parsed) {
         set->info[unit].present = true;
         set->info[unit].ready = false;
         set->info[unit].drive_attrs = OLNK_DRIVE_ATTR_DEFAULT;

@@ -516,6 +516,36 @@ static void test_dos_disk_hal_int25_26(void) {
     CHECK(ops.read_sectors(2U, 0UL, 1U, sec_r, &xfer, ops.user_data) ==
               OLNK_DOS_MAKE_ERROR(OLNK_DOS_ERR_DRIVE_NOT_READY),
           "not-ready propagates 0x8102");
+
+    /* Non-bootable RAMDRIVE.SYS (DOS 3.x 19-byte BPB, no 0x55 0xAA boot signature!) */
+    g_mock_disk.ready = true;
+    memset(g_mock_disk.sectors[0], 0, OLNK_SECTOR_SIZE);
+    g_mock_disk.sectors[0][0] = 0xEBU;
+    g_mock_disk.sectors[0][1] = 0x1DU;
+    g_mock_disk.sectors[0][2] = 0x90U;
+    memcpy(&g_mock_disk.sectors[0][3], "RDV 1.20", 8U);
+    olnk_write_u16_le(&g_mock_disk.sectors[0][11], 512U);
+    g_mock_disk.sectors[0][13] = 1U;
+    olnk_write_u16_le(&g_mock_disk.sectors[0][14], 1U);
+    g_mock_disk.sectors[0][16] = 1U;
+    olnk_write_u16_le(&g_mock_disk.sectors[0][17], 256U);
+    olnk_write_u16_le(&g_mock_disk.sectors[0][19], SIM_DISK_SECTORS);
+    g_mock_disk.sectors[0][21] = 0xF8U;
+    olnk_write_u16_le(&g_mock_disk.sectors[0][22], 3U);
+    olnk_write_u16_le(&g_mock_disk.sectors[0][24], 1U);
+    olnk_write_u16_le(&g_mock_disk.sectors[0][26], 1U);
+    /* Simulated DOS 3.x boot code at offset 0x1E..0x23 (must NOT pollute total_sectors_32!) */
+    g_mock_disk.sectors[0][30] = 0x08U;
+    g_mock_disk.sectors[0][31] = 0xEBU;
+    g_mock_disk.sectors[0][32] = 0xFEU;
+    g_mock_disk.sectors[0][33] = 0x41U;
+    /* Intentionally leave bytes 510..511 == 0x00 0x00 */
+    CHECK(ops.build_bpb(2U, 0xF8U, &bpb, ops.user_data) == OLNK_DOS_STATUS_DONE,
+          "RAMDRIVE.SYS 19B BPB without 55 AA succeeds in dos_hal_disk");
+    CHECK((bpb.bytes_per_sector == 512U) && (bpb.num_fats == 1U) &&
+              (bpb.total_sectors_16 == SIM_DISK_SECTORS) && (bpb.total_sectors_32 == 0UL) &&
+              (bpb.hidden_sectors == 0UL),
+          "RAMDRIVE.SYS BPB geometry exact & boot code does not corrupt 32-bit fields");
 }
 
 /* =========================================================================
