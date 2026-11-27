@@ -178,15 +178,15 @@ openlnk (--port <tty/pty> | --pipe <prefix> | --peer-pipe <prefix>) [options] <c
 
 > **Full Guide:** See **[cleanroom/dos/README.md](cleanroom/dos/README.md)** for installation, all `CONFIG.SYS` and CLI switches, RAMDrive/FAT12/FAT16 support, null-modem pinouts, and troubleshooting.
 
-All three targets compile with **Open Watcom v2** (`-ms -0 -za99 -wx -we -os -zm -s -zl` + WASM `-0`) for `8086`/`8088` and `NEC V20`/`V30` CPUs with **100% Zero-CRT linkage (`0` `clibs.lib` modules)** at the default `MAX_PAYLOAD=8192`:
+All three targets compile with **Open Watcom v2** (`-ms -0 -za99 -wx -we -os -zm -s -zl` + WASM `-0`) for `8086`/`8088` and `NEC V20`/`V30` CPUs with **100% Zero-CRT linkage (`0` `clibs.lib` modules)** (`SYS_MAX_PAYLOAD=2048` for `OPENLNK.SYS`, `MAX_PAYLOAD=8192` for `OPENSVR.EXE` / `OPENLNK.EXE`):
 
 | Binary | Type | Disk Size | Conventional RAM | Role |
 | :--- | :--- | :---: | :---: | :--- |
-| `OPENLNK.SYS` | Block Device Driver (`CONFIG.SYS`) | `15,068 B` (`14.7 KiB`) | `26,656 B` (`26.0 KiB` resident, incl. 2 KiB private stack) | Redirects remote drives as native DOS drive letters; supports offline boot & lazy connect |
-| `OPENSVR.EXE` | Standalone DOS MZ Server | `17,122 B` (`16.7 KiB`) | `31,744 B` (`31.0 KiB`, incl. 3 KiB stack) | Serves local DOS drives (hard disks, floppies, RAMDrives) over `COM1`–`COM4` |
-| `OPENLNK.EXE` | Standalone DOS MZ Client CLI | `12,934 B` (`12.6 KiB`) | `24,816 B` (`24.2 KiB`, incl. 3 KiB stack) | One-shot drive info, `/DIR`, and `/GET` without modifying `CONFIG.SYS` |
+| `OPENLNK.SYS` | Block Device Driver (`CONFIG.SYS`) | `16,038 B` (`15.7 KiB`) | `13,792 B` (`13.67 KiB` `MEM /C` for `/DRIVES:4`, `13.42 KiB` `/DRIVES:1`, incl. `896 B` private stack; `2,102 B` `INIT` discarded) | Redirects remote drives as native DOS drive letters; supports offline boot & lazy connect |
+| `OPENSVR.EXE` | Standalone DOS MZ Server | `16,824 B` (`16.4 KiB`) | `31,440 B` (`30.7 KiB`, incl. 3 KiB stack) | Serves local DOS drives (hard disks, floppies, RAMDrives) over `COM1`–`COM4` |
+| `OPENLNK.EXE` | Standalone DOS MZ Client CLI | `11,596 B` (`11.3 KiB`) | `23,472 B` (`22.9 KiB`, incl. 3 KiB stack) | One-shot drive info, `/DIR`, and `/GET` without modifying `CONFIG.SYS` |
 
-> **MS-DOS 6.22 RAM Benchmark vs. Original `INTERLNK`/`INTERSVR`:** Measured live in 86Box MS-DOS 6.22 — `OPENSVR.EXE` uses **4.1×–5.3× less conventional RAM** than `INTERSVR.EXE` (`32 KiB` min / `31.3 KiB` HWM vs. `132 KiB` min / `165.1 KiB` claimed), while `OPENLNK.SYS` uses `26.2 KiB` (`22.2 KiB` at `MAX_PAYLOAD=4096`) vs. `7.7–9.3 KiB` for assembly `INTERLNK.EXE`. See **[docs/dos_ram_benchmark.md](docs/dos_ram_benchmark.md)** and [`tools/bench/run_dos_ram_benchmark.py`](tools/bench/run_dos_ram_benchmark.py).
+> **MS-DOS 6.22 RAM Benchmark vs. Original `INTERLNK`/`INTERSVR`:** Measured live in 86Box MS-DOS 6.22 — `OPENSVR.EXE` uses **4.2×–5.3× less conventional RAM** than `INTERSVR.EXE` (`32 KiB` min / `30.95 KiB` HWM vs. `132 KiB` min / `165.1 KiB` claimed), while `OPENLNK.SYS` uses **`13.67 KiB`** (`13.42 KiB` for 1 drive; `15.67 KiB` at `SYS_MAX_PAYLOAD=4096`) vs. `7.67–9.33 KiB` for assembly `INTERLNK.EXE` (`OPENLNK.EXE` standalone: `24 KiB` min / `20 KiB` at 4K). See **[docs/dos_ram_benchmark.md](docs/dos_ram_benchmark.md)** and [`tools/bench/run_dos_ram_benchmark.py`](tools/bench/run_dos_ram_benchmark.py).
 
 **Offline Boot & Lazy-Connect (`CONFIG.SYS`):**
 
@@ -205,7 +205,7 @@ docker build --platform linux/amd64 -t openlnk-watcom -f tools/docker/Dockerfile
 # Cross-compile OPENSVR.EXE, OPENLNK.EXE, and OPENLNK.SYS into cleanroom/dos/build/:
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" openlnk-watcom
 
-# Verify MZ/.SYS headers, Zero-CRT linkage, exact disk == _sys_bss_start, and size budgets:
+# Verify MZ/.SYS headers, Zero-CRT linkage, discardable INIT layout, and size budgets:
 python3 tools/ci/verify_dos_binaries.py --build-dir cleanroom/dos/build
 ```
 

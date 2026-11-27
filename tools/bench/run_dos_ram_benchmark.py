@@ -110,8 +110,8 @@ DRIVER_BOOT_CONFIGS: tuple[tuple[str, str, str], ...] = (
 )
 
 LIMIT_PROBES: dict[str, tuple[str, tuple[int, ...], str]] = {
-    "OPENLNK8": ("C:\\BENCH\\OPENLNK.EXE /?", (20, 22, 24, 25, 26, 28, 32), ""),
-    "OPENLNK4": ("C:\\BENCH\\OPENLNK4.EXE /?", (16, 18, 20, 21, 22, 24, 28), ""),
+    "OPENLNK8": ("C:\\BENCH\\OPENLNK.EXE /?", (20, 22, 23, 24, 25, 26, 28, 32), ""),
+    "OPENLNK4": ("C:\\BENCH\\OPENLNK4.EXE /?", (16, 18, 19, 20, 21, 22, 24, 28), ""),
     "INTERLNK_CLI": ("C:\\DOS\\INTERLNK.EXE", (14, 16, 17, 18, 20, 24), ""),
     "OPENSVR8": ("C:\\BENCH\\OPENSVR.EXE C:", (28, 30, 31, 32, 33, 34, 36, 40), "/KEY:ESC /TICKS:18"),
     "OPENSVR4": ("C:\\BENCH\\OPENSVR4.EXE C:", (24, 26, 27, 28, 29, 30, 32), "/KEY:ESC /TICKS:18"),
@@ -299,7 +299,10 @@ def build_dos_artifacts(out_dir: Path, watcom_docker: str) -> None:
             cdir = Path(tmp_s) / "cleanroom"
             shutil.copytree(REPO_ROOT / "cleanroom", cdir, ignore=shutil.ignore_patterns("build"))
             subprocess.run(
-                ["make", "-C", str(cdir / "dos"), "-f", "Makefile.watcom", "clean", "all", "MAX_PAYLOAD=4096"],
+                [
+                    "make", "-C", str(cdir / "dos"), "-f", "Makefile.watcom",
+                    "clean", "all", "MAX_PAYLOAD=4096", "SYS_MAX_PAYLOAD=4096",
+                ],
                 env=env,
                 check=True,
             )
@@ -326,7 +329,7 @@ def build_dos_artifacts(out_dir: Path, watcom_docker: str) -> None:
             "cp -r /workspace/tools/bench/dos_profiler /tmp/dos_profiler; "
             "make -C /tmp/dos_profiler -f Makefile.watcom OUT_DIR=/bench_out all; "
             "cp -r /workspace/cleanroom /tmp/cleanroom4k; "
-            "make -C /tmp/cleanroom4k/dos -f Makefile.watcom clean all MAX_PAYLOAD=4096; "
+            "make -C /tmp/cleanroom4k/dos -f Makefile.watcom clean all MAX_PAYLOAD=4096 SYS_MAX_PAYLOAD=4096; "
             "cp /tmp/cleanroom4k/dos/build/OPENLNK.SYS /bench_out/OPENLNK4.SYS; "
             "cp /tmp/cleanroom4k/dos/build/OPENSVR.EXE /bench_out/OPENSVR4.EXE; "
             "cp /tmp/cleanroom4k/dos/build/OPENLNK.EXE /bench_out/OPENLNK4.EXE; "

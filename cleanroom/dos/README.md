@@ -12,22 +12,24 @@ Related docs: [Root README](../../README.md) · [Protocol Specification](../../d
 
 ## Targets & Zero-CRT Memory Layout
 
-Compiled at default `MAX_PAYLOAD=8192` (`-ms -0 -za99 -wx -we -os -zm -s -zl` + WASM `-0`):
+Compiled with Open Watcom v2 (`-ms -0 -za99 -wx -we -os -zm -s -zl` + WASM `-0`; default `SYS_MAX_PAYLOAD=2048` for `OPENLNK.SYS`, `MAX_PAYLOAD=8192` for `OPENSVR.EXE` / `OPENLNK.EXE`):
 
 | Binary | Format | Disk Size (CI Budget) | Conventional RAM (Stack) | `clibs.lib` | Purpose |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| **`OPENLNK.SYS`** | MS-DOS Block Device Driver (raw binary) | `15,068 B` / `14.7 KiB` (`<= 15 KiB`) | `26,656 B` / `26.0 KiB` resident (`2,048 B` private stack) | `0` | Mounts remote drives as native DOS letters (`D:`, `E:`, ...) via `CONFIG.SYS` |
-| **`OPENSVR.EXE`** | DOS MZ Executable | `17,122 B` / `16.7 KiB` (`<= 17 KiB`) | `31,744 B` / `31.0 KiB` (`3,072 B` stack) | `0` | Serves local DOS drives (hard disks, floppies, RAMDrives) over `COM1`–`COM4` |
-| **`OPENLNK.EXE`** | DOS MZ Executable | `12,934 B` / `12.6 KiB` (`<= 13 KiB`) | `24,816 B` / `24.2 KiB` (`3,072 B` stack) | `0` | Standalone one-shot client CLI (drive info, `/DIR`, `/GET`) without reboot |
+| **`OPENLNK.SYS`** | MS-DOS Block Device Driver (raw binary) | `16,038 B` / `15.7 KiB` (`<= 16.5 KiB`) | `13,792 B` (`/DRIVES:4`; `14.0 KB` / `13.67 KiB` in `MEM /C`, `13,936 B` max 8-drv; `896 B` private stack) | `0` | Mounts remote drives as native DOS letters (`D:`, `E:`, ...) via `CONFIG.SYS` |
+| **`OPENSVR.EXE`** | DOS MZ Executable | `16,824 B` / `16.4 KiB` (`<= 16.75 KiB`) | `31,440 B` / `30.7 KiB` (`3,072 B` stack) | `0` | Serves local DOS drives (hard disks, floppies, RAMDrives) over `COM1`–`COM4` |
+| **`OPENLNK.EXE`** | DOS MZ Executable | `11,596 B` / `11.3 KiB` (`<= 12.0 KiB`) | `23,472 B` / `22.9 KiB` (`3,072 B` stack) | `0` | Standalone one-shot client CLI (drive info, `/DIR`, `/GET`) without reboot |
 
 ### How Zero-CRT & Small Footprint Work
 
 - **`OPENLNK.SYS`** uses a single-segment DGROUP layout (`CS == DS == ES == SS`, `< 64 KiB`) with the 18-byte MS-DOS block device driver header (`0xFFFFFFFF`, attribute `0x2842`, Strategy `0x0012`, Interrupt `0x001D`, signature `'OPENLNK'`) pinned at file offset `0x0000` (`openlnk_sys_entry.asm`).
-  - `_BSS` and `_STACK` are omitted on disk via `wlink ... noemit` (file size matches `_sys_bss_start` byte-for-byte) and `_BSS` is zeroed once on first Interrupt entry.
-  - Every Interrupt call atomically switches `SS:SP` (8088-safe `CLI`/`POPF`) onto a private `2,048 B` driver stack.
-  - Sector transfers use a `4 KiB` (8-sector) bounce buffer aliased into `g_sys_client.link.rx_buffer` with 64 KiB segment-wrap-safe far-pointer normalization.
-- **`OPENSVR.EXE` & `OPENLNK.EXE`** link a minimal 75-byte assembly startup (`dos_exe_crt0.asm`), direct `INT 21h` console/file/keyboard HAL (`dos_hal_io.c`), and pure-8086 32-bit multiply/divide helpers (`__U4M`, `__I4M`, `__U4D`), eliminating Watcom's `cstart`, `stdio`, `ctype`, `conio`, and heap allocator.
-- Optional tighter RAM build: pass `MAX_PAYLOAD=4096` to `Makefile.watcom` to halve the static frame buffer from 8 KiB to 4 KiB when operating on heavily constrained 8088 systems (`OPENLNK.SYS` drops from `26.2 KiB` to `22.2 KiB` total DOS RAM; `OPENSVR.EXE` drops from `32 KiB` to `28 KiB` minimum free RAM — see [docs/dos_ram_benchmark.md](../../docs/dos_ram_benchmark.md) for live MS-DOS 6.22 measurements against `INTERLNK.EXE` / `INTERSVR.EXE`).
+  - All `INIT`-only code, `CONFIG.SYS` argument parsing, UART BDA discovery, banner formatting, and `INIT` strings live in trailing `INIT_TEXT`/`INIT_DATA` segments (`2,102 B`) placed after `_DRVSTK` and `_UNIT_BSS` (`38 B/unit`). On `Cmd 0x00 (INIT)` return, the Break Address (`rh+14..17`) trims both unused unit slots `[units..7]` and the entire `INIT` tail, returning them to MS-DOS (resident `CONST = 0 B`).
+  - Every Interrupt call atomically switches `SS:SP` (8088-safe `CLI`/`POPF`) onto a private `896 B` driver stack (`_DRVSTK`; live MS-DOS 6.22 peak measured at `464 B`, leaving `+432 B` safety headroom).
+  - Sector transfers default to a `2 KiB` (4-sector, `SYS_MAX_PAYLOAD=2048`) bounce buffer aliased into `g_sys_client.link.rx_buffer` with `96 B` control buffer (`OLNK_CLIENT_CTRL_BUF_SIZE=96U`) and 64 KiB segment-wrap-safe far-pointer normalization.
+- **`OPENSVR.EXE` & `OPENLNK.EXE`** link a minimal 75-byte assembly startup (`dos_exe_crt0.asm`), direct `INT 21h` console/file/keyboard HAL (`dos_hal_io.c`), compact `rep stosb`/`rep movsb` runtime helpers (`dos_sys_rt.c`), and pure-8086 32-bit multiply/divide helpers (`__U4M`, `__I4M`, `__U4D`), eliminating Watcom's `cstart`, `stdio`, `ctype`, `conio`, and heap allocator.
+- Optional payload tuning:
+  - Pass `SYS_MAX_PAYLOAD=4096` to build `OPENLNK.SYS` with a 4 KiB (8-sector) bounce buffer (`15.67 KiB` in `MEM /C` for `/DRIVES:4`).
+  - Pass `MAX_PAYLOAD=4096` to halve the static frame buffer in `OPENSVR.EXE` and `OPENLNK.EXE` (`OPENSVR.EXE` drops from `32 KiB` to `28 KiB` minimum free RAM; `OPENLNK.EXE` drops from `24 KiB` to `20 KiB` — see [docs/dos_ram_benchmark.md](../../docs/dos_ram_benchmark.md) for live MS-DOS 6.22 measurements against `INTERLNK.EXE` / `INTERSVR.EXE`).
 
 ---
 
@@ -80,8 +82,8 @@ Header attribute word `0x2842` (`Non-IBM | Open/Close/Removable | Generic IOCTL 
 | `0x00` | `INIT` | Parses `CONFIG.SYS` switches, initializes UART, attempts initial connect, registers BPB pointer array |
 | `0x01` | `MEDIA_CHECK` | Forwards opcode `0x02`; forces `0xFF` (`MEDIA_CHANGED`) once after offline standby/remap; returns previous volume label pointer |
 | `0x02` | `BUILD_BPB` | Forwards opcode `0x03`; writes packed 25-byte MS-DOS BPB into driver segment |
-| `0x04` | `READ` | Forwards opcode `0x04` in `<= 4 KiB` chunks with 16-bit & 32-bit LBA (`start16 == 0xFFFF`) |
-| `0x08` / `0x09` | `WRITE` / `WRITE_VERIFY` | Forwards opcode `0x05` / `0x06` in `<= 4 KiB` chunks; propagates `0x8100` (`WRITE_PROTECT`) & `0x810F` (`INVALID_DISK_CHANGE`) |
+| `0x04` | `READ` | Forwards opcode `0x04` in `<= 2 KiB` chunks (configurable up to `4 KiB`) with 16-bit & 32-bit LBA (`start16 == 0xFFFF`) |
+| `0x08` / `0x09` | `WRITE` / `WRITE_VERIFY` | Forwards opcode `0x05` / `0x06` in `<= 2 KiB` chunks; propagates `0x8100` (`WRITE_PROTECT`) & `0x810F` (`INVALID_DISK_CHANGE`) |
 | `0x0D` / `0x0E` | `OPEN` / `CLOSE` | Forwards opcodes `0x16` / `0x17` |
 | `0x0F` | `REMOVABLE_MEDIA` | Returns `DONE` with `BUSY=0` so DOS honors `MEDIA_CHECK` on remote volumes |
 | `0x13` | `GENERIC_IOCTL` | Forwards Category `0x08` Functions `0x66` (Get Media ID) & `0x46` (Set Media ID) via opcode `0x1D` |
@@ -211,9 +213,9 @@ FC /B C:\TEST64K.BIN C:\VERIFY.BIN
 docker build --platform linux/amd64 -t openlnk-watcom -f tools/docker/Dockerfile.watcom .
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" openlnk-watcom
 
-# Optional 4 KiB payload build for ultra-tight RAM budgets:
+# Optional 4 KiB payload build (4 KiB bounce buffer for OPENLNK.SYS, tighter 4 KiB buffers for EXEs):
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" openlnk-watcom \
-  make -C cleanroom/dos -f Makefile.watcom clean all MAX_PAYLOAD=4096
+  make -C cleanroom/dos -f Makefile.watcom clean all MAX_PAYLOAD=4096 SYS_MAX_PAYLOAD=4096
 ```
 
 Outputs are written to `cleanroom/dos/build/` (`OPENLNK.SYS`, `OPENSVR.EXE`, `OPENLNK.EXE`, and linker maps `OPENLNK.MAP`, `OPENSVR.MAP`, `OPENLNKX.MAP`).
@@ -231,7 +233,7 @@ make -C cleanroom/dos -f Makefile.watcom
 ### Automated Verification
 
 ```bash
-# Verify MZ/.SYS headers, 0 clibs.lib modules, exact disk == _sys_bss_start, and size budgets:
+# Verify MZ/.SYS headers, 0 clibs.lib modules, discardable INIT layout, and tightened size budgets:
 python3 tools/ci/verify_dos_binaries.py --build-dir cleanroom/dos/build
 
 # Run host simulated-16550A + INT 25h/26h + OPENLNK.SYS Request Header test suite (164/164):
