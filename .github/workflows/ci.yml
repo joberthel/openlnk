@@ -191,50 +191,64 @@ jobs:
         run: python3 -m unittest discover -s tests -p "test_*.py" -v
 
   esp32-idf-build:
-    name: ESP32 Embedded (ESP-IDF 5.x — esp32 & esp32c3)
+    name: ESP32 Embedded (ESP-IDF 5.3.2 / ${{ matrix.target }})
     runs-on: ubuntu-latest
     container:
       image: espressif/idf:v5.3.2
     defaults:
       run:
         shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: esp32
+            build_img_mode: true
+          - target: esp32c3
+            build_img_mode: false
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: 256M
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cross-compile sd_server_idf for esp32 (SDMMC + Raw SD)
+      - name: Cache ESP-IDF ccache (${{ matrix.target }})
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: esp-idf-5.3.2-${{ matrix.target }}-${{ hashFiles('esp32/CMakeLists.txt', 'esp32/examples/sd_server_idf/**') }}
+          restore-keys: |
+            esp-idf-5.3.2-${{ matrix.target }}-
+
+      - name: Cross-compile sd_server_idf for ${{ matrix.target }} (Raw SD)
         run: |
           source /opt/esp/idf/export.sh
           cd esp32/examples/sd_server_idf
-          idf.py -B build_esp32 -DSDKCONFIG=sdkconfig.esp32 set-target esp32
-          idf.py -B build_esp32 -DSDKCONFIG=sdkconfig.esp32 build 2>&1 | tee build_esp32/build.log
-          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32/build.log
-          idf.py -B build_esp32 -DSDKCONFIG=sdkconfig.esp32 size
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" set-target "${{ matrix.target }}"
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" build 2>&1 | tee "build_${{ matrix.target }}/build.log"
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" "build_${{ matrix.target }}/build.log"
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" size
 
-      - name: Cross-compile sd_server_idf for esp32c3 (SDSPI-only, !SOC_SDMMC_HOST_SUPPORTED)
-        run: |
-          source /opt/esp/idf/export.sh
-          cd esp32/examples/sd_server_idf
-          idf.py -B build_esp32c3 -DSDKCONFIG=sdkconfig.esp32c3 set-target esp32c3
-          idf.py -B build_esp32c3 -DSDKCONFIG=sdkconfig.esp32c3 build 2>&1 | tee build_esp32c3/build.log
-          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32c3/build.log
-          idf.py -B build_esp32c3 -DSDKCONFIG=sdkconfig.esp32c3 size
-
-      - name: Cross-compile sd_server_idf for esp32 (VFS .img/.vhd mode)
+      - name: Cross-compile sd_server_idf for ${{ matrix.target }} (VFS .img/.vhd mode)
+        if: ${{ matrix.build_img_mode }}
         run: |
           source /opt/esp/idf/export.sh
           cd esp32/examples/sd_server_idf
           printf 'CONFIG_OPENLNK_STORAGE_MODE_IMG=y\n' > sdkconfig.ci_img
-          idf.py -B build_esp32_img -DSDKCONFIG=sdkconfig.esp32_img -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img set-target esp32
-          idf.py -B build_esp32_img -DSDKCONFIG=sdkconfig.esp32_img -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img build 2>&1 | tee build_esp32_img/build.log
-          ! grep -nE "(/cleanroom/|/esp32/).*warning:" build_esp32_img/build.log
+          idf.py -B "build_${{ matrix.target }}_img" -DSDKCONFIG="sdkconfig.${{ matrix.target }}_img" -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img set-target "${{ matrix.target }}"
+          idf.py -B "build_${{ matrix.target }}_img" -DSDKCONFIG="sdkconfig.${{ matrix.target }}_img" -DSDKCONFIG_DEFAULTS=sdkconfig.ci_img build 2>&1 | tee "build_${{ matrix.target }}_img/build.log"
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" "build_${{ matrix.target }}_img/build.log"
           rm -f sdkconfig.ci_img
 
-      - name: Upload ESP32 firmware binaries
+      - name: Show ccache statistics
+        run: ccache -s
+
+      - name: Upload ESP32 firmware binaries (${{ matrix.target }})
         uses: actions/upload-artifact@v4
         with:
-          name: openlnk-esp32-idf-firmware
+          name: openlnk-esp32-idf-${{ matrix.target }}
           path: |
-            esp32/examples/sd_server_idf/build_esp32/openlnk_sd_server.bin
-            esp32/examples/sd_server_idf/build_esp32/openlnk_sd_server.elf
-            esp32/examples/sd_server_idf/build_esp32c3/openlnk_sd_server.bin
-            esp32/examples/sd_server_idf/build_esp32c3/openlnk_sd_server.elf
+            esp32/examples/sd_server_idf/build_${{ matrix.target }}/openlnk_sd_server.bin
+            esp32/examples/sd_server_idf/build_${{ matrix.target }}/openlnk_sd_server.elf

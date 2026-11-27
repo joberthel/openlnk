@@ -3,4 +3,11 @@ idf_component_register(
         "main.c"
     INCLUDE_DIRS
         "."
+    PRIV_REQUIRES
+        esp32
+        driver
+        sdmmc
+        fatfs
+        vfs
+        esp_timer
 )

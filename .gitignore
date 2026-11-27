@@ -47,6 +47,7 @@ sdkconfig
 sdkconfig.old
 managed_components/
 .pio/
+.ccache/
 *.o
 *.obj
 *.a
