@@ -920,6 +920,36 @@ static int dummy_null_write(const uint8_t *buf, size_t len, uint32_t timeout_ms,
     return (int)len;
 }
 
+typedef struct {
+    uint8_t reply_byte;
+    uint32_t max_quiet_seen_ms;
+    uint16_t reads;
+} proto_err_hal_t;
+
+static int proto_err_read(uint8_t *buf, size_t len, uint32_t timeout_ms, void *ud) {
+    proto_err_hal_t *h = (proto_err_hal_t *)ud;
+    if ((h == NULL) || (buf == NULL) || (len == 0U)) {
+        return 0;
+    }
+    h->reads += 1U;
+    /* First read of each sync attempt gets a mismatched-baud non-0x00 reply byte;
+     * subsequent drain reads return 0 so we can observe the quiet_ms passed in. */
+    if ((h->reads % 2U) == 1U) {
+        buf[0] = h->reply_byte;
+        return 1;
+    }
+    if (timeout_ms > h->max_quiet_seen_ms) {
+        h->max_quiet_seen_ms = timeout_ms;
+    }
+    return 0;
+}
+
+static bool dummy_set_baud(uint32_t baudrate, void *ud) {
+    (void)baudrate;
+    (void)ud;
+    return true;
+}
+
 static void test_serial_burst_wire_timeout_and_resync_recovery(void) {
     static olnk_server_t srv;
     olnk_transport_t tr;
@@ -972,15 +1002,77 @@ static void test_serial_burst_wire_timeout_and_resync_recovery(void) {
     olnk_server_feed_bytes(&srv, &aa, 1U);
     EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_55);
 
-    /* 4. High-baud (115200) mismatched 9600 bps 0xAA noise bursts in RX_ERROR_DRAIN drop to 9600 */
+    /* 4. Single corrupted Burst frame at 115200 bps must NOT drop the link, while
+     * 3 spaced 9600-bps 0xAA probes (even arriving as 0x00,0x00,0x00,0x00 with seq==0!)
+     * MUST drop back to 9600 bps SYNC_WAIT_AA. */
     olnk_server_drop_link(&srv);
     olnk_server_feed_bytes(&srv, sync_seq, 3U);
     srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_115200;
+    srv.link.seq = 0U;
     {
-        uint8_t noise[4] = { 0xF8U, 0x00U, 0xF8U, 0x00U };
-        olnk_server_feed_bytes(&srv, noise, sizeof(noise));
+        uint8_t burst_glitch[6] = { 0xF8U, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U };
+        olnk_server_feed_bytes(&srv, burst_glitch, sizeof(burst_glitch));
+        EXPECT_EQ_U32(srv.link.current_baud_idx, (uint32_t)OLNK_BAUD_115200);
+        EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_RX_ERROR_DRAIN);
+        EXPECT_EQ_U32(srv.idle_garbage_count, 1U);
+    }
+
+    /* Reset and verify seq==0 + 0x00,0x00,0x00,0x00 (exact 9600 bps 0xAA on 115200 UART) */
+    olnk_server_drop_link(&srv);
+    olnk_server_feed_bytes(&srv, sync_seq, 3U);
+    srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_115200;
+    srv.link.seq = 0U;
+    {
+        uint8_t probe_115k[4] = { 0x00U, 0x00U, 0x00U, 0x00U };
+        /* Probe 1: 0x00 matches seq==0 long header -> len=0x0000 -> error 1 + drain */
+        olnk_server_feed_bytes(&srv, probe_115k, sizeof(probe_115k));
+        EXPECT_EQ_U32(srv.idle_garbage_count, 1U);
+        EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_RX_ERROR_DRAIN);
+
+        /* Probe 2 arriving mid-drain (>=50 ms gap) increments to error 2 */
+        olnk_server_tick(&srv, 110UL);
+        olnk_server_feed_bytes(&srv, probe_115k, sizeof(probe_115k));
+        EXPECT_EQ_U32(srv.idle_garbage_count, 2U);
+
+        /* Probe 3 after drain timeout returns to IDLE_RX -> error 3 -> drop to 9600 bps! */
+        olnk_server_tick(&srv, 275UL);
+        EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_IDLE_RX);
+        olnk_server_feed_bytes(&srv, probe_115k, sizeof(probe_115k));
         EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_AA);
         EXPECT_EQ_U32(srv.link.current_baud_idx, (uint32_t)OLNK_BAUD_9600);
+    }
+
+    /* 5. seq==0 at 38400 bps (0x80, 0x78 false short-frame -> RX_PAYLOAD timeout) drops */
+    olnk_server_drop_link(&srv);
+    olnk_server_feed_bytes(&srv, sync_seq, 3U);
+    srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_38400;
+    srv.link.seq = 0U;
+    {
+        uint8_t probe_38k[2] = { 0x80U, 0x78U };
+        int p;
+        for (p = 0; p < 3; ++p) {
+            olnk_server_feed_bytes(&srv, probe_38k, sizeof(probe_38k));
+            olnk_server_tick(&srv, 275UL);
+        }
+        EXPECT_EQ_U32(srv.srv_state, (uint32_t)OLNK_SRV_SYNC_WAIT_AA);
+        EXPECT_EQ_U32(srv.link.current_baud_idx, (uint32_t)OLNK_BAUD_9600);
+    }
+
+    /* 6. Client sync retry spaces probes by sync_timeout_ms on OLNK_ERR_PROTOCOL */
+    {
+        static olnk_client_t cli;
+        proto_err_hal_t hal;
+        olnk_transport_t ctr;
+        memset(&hal, 0, sizeof(hal));
+        memset(&ctr, 0, sizeof(ctr));
+        hal.reply_byte = 0xFEU;
+        ctr.read = proto_err_read;
+        ctr.write = dummy_null_write;
+        ctr.set_baud = dummy_set_baud;
+        ctr.user_data = &hal;
+        EXPECT_EQ_U32(olnk_client_init(&cli, ctr), OLNK_OK);
+        EXPECT_EQ_U32(olnk_client_connect(&cli, 2U), OLNK_ERR_PROTOCOL);
+        EXPECT_EQ_U32(hal.max_quiet_seen_ms, (uint32_t)OLNK_TIMEOUT_SYNC_MS);
     }
 }
 

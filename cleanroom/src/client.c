@@ -3,14 +3,14 @@
 
 #include <string.h>
 
-static void cli_drain_rx(olnk_client_t *cli) {
+static void cli_drain_rx(olnk_client_t *cli, uint32_t quiet_ms) {
     uint8_t discard[32];
     uint16_t guard;
     if (cli->link.transport.read == NULL) {
         return;
     }
     for (guard = 0U; guard < 128U; ++guard) {
-        int n = cli->link.transport.read(discard, sizeof(discard), 5U, cli->link.transport.user_data);
+        int n = cli->link.transport.read(discard, sizeof(discard), quiet_ms, cli->link.transport.user_data);
         if (n <= 0) {
             break;
         }
@@ -89,7 +89,11 @@ olnk_status_t olnk_client_connect(olnk_client_t *cli, uint16_t sync_retries) {
     attempts = (sync_retries == 0U) ? 1U : sync_retries;
     for (i = 0U; i < attempts; ++i) {
         if (i > 0U) {
-            cli_drain_rx(cli);
+            /* If the peer echoed mismatched-baud bytes (OLNK_ERR_PROTOCOL) and
+             * returned immediately, wait a full sync_timeout_ms quiet gap so
+             * the peer's RX_ERROR_DRAIN completes and probes stay spaced apart. */
+            uint32_t quiet_ms = (st == OLNK_ERR_PROTOCOL) ? cli->link.sync_timeout_ms : 5U;
+            cli_drain_rx(cli, quiet_ms);
         }
         st = olnk_link_connect_client(&cli->link);
         if ((st == OLNK_OK) || (st == OLNK_ERR_HAL_IO)) {

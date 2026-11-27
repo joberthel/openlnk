@@ -139,6 +139,8 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
     olnk_dos_puts("Press ESC or Q to exit.\n");
     {
         uint32_t last_tick = olnk_dos_get_ticks(&g_dos_uart);
+        uint32_t last_line_err = g_dos_uart.line_errors;
+        uint32_t last_rx_ok = g_dos_server.link.frames_rx_ok;
         for (;;) {
             uint8_t rx_buf[64];
             int n;
@@ -156,6 +158,19 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
             if (n > 0) {
                 olnk_server_feed_bytes(&g_dos_server, rx_buf, (size_t)n);
                 last_tick = olnk_dos_get_ticks(&g_dos_uart);
+                if ((g_dos_server.link.frames_rx_ok != last_rx_ok) ||
+                    (g_dos_server.link.current_baud_idx <= (uint8_t)OLNK_BAUD_9600) ||
+                    ((g_dos_server.srv_state >= (uint8_t)OLNK_SRV_BAUD_WAIT_IDX) &&
+                     (g_dos_server.srv_state <= (uint8_t)OLNK_SRV_BAUD_TEST_PAIR))) {
+                    last_rx_ok = g_dos_server.link.frames_rx_ok;
+                    last_line_err = g_dos_uart.line_errors;
+                } else if (((g_dos_server.srv_state == (uint8_t)OLNK_SRV_IDLE_RX) ||
+                            (g_dos_server.srv_state == (uint8_t)OLNK_SRV_RX_ERROR_DRAIN)) &&
+                           (g_dos_server.req_phase == (uint8_t)OLNK_REQ_PHASE_CMD) &&
+                           ((g_dos_uart.line_errors - last_line_err) >= 3UL)) {
+                    olnk_server_drop_link(&g_dos_server);
+                    last_line_err = g_dos_uart.line_errors;
+                }
             } else {
                 now_tick = olnk_dos_get_ticks(&g_dos_uart);
                 if (now_tick != last_tick) {

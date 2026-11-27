@@ -1045,6 +1045,18 @@ static void handle_rpc_frame(
  * Byte-Driven Non-Blocking State Machine
  * ========================================================================= */
 
+static bool srv_note_high_baud_error(olnk_server_t *srv) {
+    if ((srv->link.current_baud_idx > (uint8_t)OLNK_BAUD_9600) &&
+        (srv->req_phase == (uint8_t)OLNK_REQ_PHASE_CMD)) {
+        srv->idle_garbage_count += 1U;
+        if (srv->idle_garbage_count >= 3U) {
+            olnk_server_drop_link(srv);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
     switch ((olnk_server_state_t)srv->srv_state) {
         case OLNK_SRV_SYNC_WAIT_AA:
@@ -1115,7 +1127,6 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
                 srv->rx_crc = OLNK_CRC16_INIT;
                 srv->rx_pos = 0U;
                 srv->rx_payload_len = 0U;
-                srv->idle_garbage_count = 0U;
                 srv->state_elapsed_ms = 0UL;
                 srv->srv_state = (uint8_t)OLNK_SRV_RX_LEN_LO;
                 srv_write_byte(srv, ack_hdr);
@@ -1134,13 +1145,8 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
             }
             /* Invalid header or line noise */
             srv->link.frames_rx_err += 1U;
-            if ((srv->link.current_baud_idx > (uint8_t)OLNK_BAUD_9600) &&
-                (srv->req_phase == (uint8_t)OLNK_REQ_PHASE_CMD)) {
-                srv->idle_garbage_count += 1U;
-                if (srv->idle_garbage_count >= 4U) {
-                    olnk_server_drop_link(srv);
-                    break;
-                }
+            if (srv_note_high_baud_error(srv)) {
+                break;
             }
             srv->state_elapsed_ms = 0UL;
             srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
@@ -1210,7 +1216,9 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
                 srv->rx_payload_len = (uint16_t)b;
                 if (srv->rx_payload_len == 0U) {
                     srv->link.frames_rx_err += 1U;
-                    srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                    if (!srv_note_high_baud_error(srv)) {
+                        srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                    }
                 } else {
                     srv->rx_pos = 0U;
                     srv->srv_state = (uint8_t)OLNK_SRV_RX_PAYLOAD;
@@ -1230,7 +1238,9 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
             srv->rx_payload_len = (uint16_t)((uint16_t)srv->rx_len_lo | ((uint16_t)b << 8U));
             if ((srv->rx_payload_len == 0U) || (srv->rx_payload_len > OLNK_MAX_PAYLOAD_SIZE)) {
                 srv->link.frames_rx_err += 1U;
-                srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                if (!srv_note_high_baud_error(srv)) {
+                    srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                }
             } else {
                 srv->rx_pos = 0U;
                 srv->srv_state = (uint8_t)OLNK_SRV_RX_PAYLOAD;
@@ -1265,12 +1275,15 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
             srv->state_elapsed_ms = 0UL;
             if (srv->rx_crc != OLNK_CRC16_RESIDUE_GOOD) {
                 srv->link.frames_rx_err += 1U;
-                srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                if (!srv_note_high_baud_error(srv)) {
+                    srv->srv_state = (uint8_t)OLNK_SRV_RX_ERROR_DRAIN;
+                }
                 break;
             }
             srv_write_byte(srv, srv->rx_hdr);
             srv->link.seq = (uint8_t)((srv->link.seq + 1U) & OLNK_HDR_SEQ_MASK);
             srv->link.frames_rx_ok += 1U;
+            srv->idle_garbage_count = 0U;
             handle_rpc_frame(srv, srv->link.rx_buffer, srv->rx_payload_len, srv->rx_more_frags);
             break;
 
@@ -1286,15 +1299,9 @@ static void srv_handle_byte(olnk_server_t *srv, uint8_t b) {
                 srv->state_elapsed_ms = 0UL;
                 break;
             }
-            if ((srv->link.current_baud_idx > (uint8_t)OLNK_BAUD_9600) &&
-                (srv->req_phase == (uint8_t)OLNK_REQ_PHASE_CMD) &&
-                (srv->idle_garbage_count > 0U)) {
-                /* Continued mismatched-baud probes (e.g. 9600 bps 0xAA on 115200 UART) */
-                srv->idle_garbage_count += 1U;
-                if (srv->idle_garbage_count >= 4U) {
-                    olnk_server_drop_link(srv);
-                    break;
-                }
+            if ((srv->state_elapsed_ms >= 50UL) && srv_note_high_baud_error(srv)) {
+                /* Distinct mismatched-baud probe burst arriving during error drain */
+                break;
             }
             srv->state_elapsed_ms = 0UL;
             break;
@@ -1488,8 +1495,10 @@ void olnk_server_tick(olnk_server_t *srv, uint32_t elapsed_ms) {
         case OLNK_SRV_RX_CRC_LO:
             if (srv->state_elapsed_ms >= srv->link.rx_byte_timeout_ms) {
                 srv->link.frames_rx_err += 1U;
-                srv->srv_state = (uint8_t)OLNK_SRV_IDLE_RX;
-                srv->state_elapsed_ms = 0UL;
+                if (!srv_note_high_baud_error(srv)) {
+                    srv->srv_state = (uint8_t)OLNK_SRV_IDLE_RX;
+                    srv->state_elapsed_ms = 0UL;
+                }
             }
             break;
 
