@@ -932,12 +932,13 @@ static void test_serial_burst_wire_timeout_and_resync_recovery(void) {
     tr.write = dummy_null_write;
     EXPECT_EQ_U32(olnk_server_init(&srv, tr, st_ops), OLNK_OK);
 
-    /* 1. Burst TX wire-time margin at 9600 bps: 8192 B frame takes ~8.5s on wire */
+    /* 1. Burst TX wire-time margin at 9600 bps: 8192 B frame takes ~8.5s on wire
+     * (large data TX frames reuse srv.link.rx_buffer, whereas tx_ctrl_buf is 256 B) */
     srv.link.current_baud_idx = (uint8_t)OLNK_BAUD_9600;
     srv.srv_state = (uint8_t)OLNK_SRV_TX_WAIT_FINAL_ACK;
     srv.tx_echo_mode = false;
     srv.tx_stream_total = 8196U;
-    srv.tx_payload_ptr = srv.tx_ctrl_buf;
+    srv.tx_payload_ptr = srv.link.rx_buffer;
     srv.tx_payload_len = 8192U;
     srv.tx_retries = 0U;
     srv.state_elapsed_ms = 0UL;
