@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/joberthel/openlnk/compare/v0.2.0...v0.3.0) (2026-11-27)
+
+
+### Features
+
+* **esp32:** add thread-safe client wrapper and FatFs VFS /dos mount ([cad1cdc](https://github.com/joberthel/openlnk/commit/cad1cdcdc0e83cf0783ac6e6dac1196b0c183d9e))
+* **esp32:** complete production-ready ESP32 HAL, examples, tests, and release bundle ([ac9f270](https://github.com/joberthel/openlnk/commit/ac9f270b226829a8b126a25149973a09f33daca1))
+
+
+### Bug Fixes
+
+* **dos:** support RAMDRIVE.SYS / non-bootable BPBs via INT 21h 440Dh and relaxed VBR ([5fa7cfb](https://github.com/joberthel/openlnk/commit/5fa7cfb2184e8884dd0a34f509678b0c6efbb58a))
+* **link:** handle seq==0 high-baud reconnect, client retry spacing & DOS UART FE fast-drop ([7c26bc6](https://github.com/joberthel/openlnk/commit/7c26bc6cfbda898c65ee9e8517e1e36419406eb8))
+* **openlnk:** clear POSIX CRTSCTS and IGNPAR for 3-wire USB-serial links ([4eeaa86](https://github.com/joberthel/openlnk/commit/4eeaa8632e398a88c61e82c9b7366e3537e40536))
+* **opensvr:** raise default idle high-baud timeout to 60s and add --idle-timeout ([cca2ce6](https://github.com/joberthel/openlnk/commit/cca2ce68377464c7c3499f5907d19b92754ab288))
+* **server:** account for real RS-232 burst TX wire time and 9600 bps resync ([31c3023](https://github.com/joberthel/openlnk/commit/31c3023c2c4a19b6a4ef130ab5b2ef26df5dbc6e))
+* **server:** recover immediately from 9600 bps probes while in high-baud RX drain ([2e41961](https://github.com/joberthel/openlnk/commit/2e4196131d12822404cba98364d7c0dc84186cb4))
+
 ## [0.2.0](https://github.com/joberthel/openlnk/compare/v0.1.0...v0.2.0) (2026-11-27)
 
 

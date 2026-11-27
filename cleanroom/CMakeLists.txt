@@ -1,6 +1,6 @@
 # cleanroom/CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
-project(libopenlnk VERSION 0.2.0 LANGUAGES C) # x-release-please-version
+project(libopenlnk VERSION 0.3.0 LANGUAGES C) # x-release-please-version
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
