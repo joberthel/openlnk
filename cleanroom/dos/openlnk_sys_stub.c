@@ -15,8 +15,13 @@
 
 #define OLNK_SYS_CMDLINE_MAX 128U
 #define OLNK_SYS_RH_MAX_LEN  30U
+#define OLNK_SYS_BOUNCE_CAP \
+    ((OLNK_SYS_BOUNCE_BYTES <= OLNK_MAX_PAYLOAD_SIZE) ? OLNK_SYS_BOUNCE_BYTES : OLNK_MAX_PAYLOAD_SIZE)
 
-/* Static resident driver state (lives in _BSS; zeroed on first Interrupt call) */
+/* Static resident driver state (lives in _BSS; zeroed on first Interrupt call).
+ * Half-duplex sector I/O reuses g_sys_client.link.rx_buffer as the 4 KiB bounce
+ * buffer (olnk_client_* always receives directly into caller buffers or ctrl_buf,
+ * never into link.rx_buffer), saving 4096 bytes of resident conventional DOS RAM. */
 static olnk_client_t g_sys_client;
 static olnk_dos_uart_t g_sys_uart;
 static olnk_dos_bpb_t g_sys_bpbs[OLNK_SYS_MAX_UNITS];
@@ -26,7 +31,6 @@ static char g_sys_vol_labels[OLNK_SYS_MAX_UNITS][12];
 static char g_sys_prev_vol_labels[OLNK_SYS_MAX_UNITS][12];
 static uint8_t g_sys_unit_map[OLNK_SYS_MAX_UNITS];
 static bool g_sys_bpb_valid[OLNK_SYS_MAX_UNITS];
-static uint8_t g_sys_bounce_buf[OLNK_SYS_BOUNCE_BYTES];
 static char g_sys_init_cmdline[OLNK_SYS_CMDLINE_MAX];
 static char g_sys_init_banner[96];
 static uint8_t g_sys_unit_count = 0U;
@@ -899,7 +903,7 @@ uint16_t olnk_dos_sys_handle_rh(
                             (g_sys_bpbs[unit].bytes_per_sector != 0U))
                                ? g_sys_bpbs[unit].bytes_per_sector
                                : OLNK_SECTOR_SIZE;
-            uint16_t max_chunk = (bps > 0U) ? (uint16_t)(sizeof(g_sys_bounce_buf) / bps) : 0U;
+            uint16_t max_chunk = (bps > 0U) ? (uint16_t)(OLNK_SYS_BOUNCE_CAP / bps) : 0U;
             uint16_t done_sectors = 0U;
             uint16_t last_status = OLNK_DOS_STATUS_DONE;
 
@@ -924,7 +928,7 @@ uint16_t olnk_dos_sys_handle_rh(
 
                 if (cmd != OLNK_DOS_CMD_READ) {
                     mem_ops->far_read(
-                        xfer_seg, xfer_off, g_sys_bounce_buf, chunk_bytes, mem_ops->ctx);
+                        xfer_seg, xfer_off, g_sys_client.link.rx_buffer, chunk_bytes, mem_ops->ctx);
                 }
 
                 memset(&req, 0, sizeof(req));
@@ -933,7 +937,7 @@ uint16_t olnk_dos_sys_handle_rh(
                 req.media_descriptor = media_desc;
                 req.start_lba = start_lba + (uint32_t)done_sectors;
                 req.sector_count = chunk;
-                req.xfer_buf = g_sys_bounce_buf;
+                req.xfer_buf = g_sys_client.link.rx_buffer;
                 req.xfer_cap = (uint32_t)chunk_bytes;
 
                 last_status = olnk_dos_sys_dispatch(&req);
@@ -941,7 +945,7 @@ uint16_t olnk_dos_sys_handle_rh(
                 if ((cmd == OLNK_DOS_CMD_READ) && (req.sector_count > 0U)) {
                     uint16_t got_bytes = (uint16_t)(req.sector_count * bps);
                     mem_ops->far_write(
-                        xfer_seg, xfer_off, g_sys_bounce_buf, got_bytes, mem_ops->ctx);
+                        xfer_seg, xfer_off, g_sys_client.link.rx_buffer, got_bytes, mem_ops->ctx);
                 }
 
                 done_sectors = (uint16_t)(done_sectors + req.sector_count);

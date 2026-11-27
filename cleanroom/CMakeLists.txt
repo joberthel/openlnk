@@ -68,6 +68,7 @@ if(OPENLNK_BUILD_TESTS)
         tests/test_dos_hal.c
         dos/dos_hal_uart.c
         dos/dos_hal_disk.c
+        dos/dos_hal_io.c
         dos/openlnk_sys_stub.c
     )
     target_include_directories(test_dos_hal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dos)

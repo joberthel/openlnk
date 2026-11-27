@@ -157,7 +157,7 @@ static void srv_send_next_read_chunk(olnk_server_t *srv) {
         if (!more) {
             srv->resp_phase = (uint8_t)OLNK_RESP_SINGLE;
         }
-        srv_start_tx_frame(srv, srv->tx_data_buf, len, more);
+        srv_start_tx_frame(srv, srv->link.rx_buffer, len, more);
         return;
     }
 
@@ -178,14 +178,14 @@ static void srv_send_next_read_chunk(olnk_server_t *srv) {
                      : srv->read_sectors_remaining;
     chunk_bytes = (uint16_t)(chunk_secs * bps);
 
-    memset(srv->tx_data_buf, 0, (size_t)chunk_bytes);
+    memset(srv->link.rx_buffer, 0, (size_t)chunk_bytes);
     if (srv->storage.read_sectors != NULL) {
         uint16_t xfer = 0U;
         (void)srv->storage.read_sectors(
             srv->read_unit,
             srv->read_next_lba,
             chunk_secs,
-            srv->tx_data_buf,
+            srv->link.rx_buffer,
             &xfer,
             srv->storage.user_data
         );
@@ -198,7 +198,7 @@ static void srv_send_next_read_chunk(olnk_server_t *srv) {
     if (!more) {
         srv->resp_phase = (uint8_t)OLNK_RESP_SINGLE;
     }
-    srv_start_tx_frame(srv, srv->tx_data_buf, chunk_bytes, more);
+    srv_start_tx_frame(srv, srv->link.rx_buffer, chunk_bytes, more);
 }
 
 static void srv_on_tx_frame_acked(olnk_server_t *srv) {
@@ -213,7 +213,7 @@ static void srv_on_tx_frame_acked(olnk_server_t *srv) {
     }
     if (srv->resp_phase == (uint8_t)OLNK_RESP_IOCTL_HDR_THEN_MID) {
         srv->resp_phase = (uint8_t)OLNK_RESP_SINGLE;
-        srv_start_tx_frame(srv, srv->tx_data_buf, OLNK_LEN_GENERIC_IOCTL_MID, false);
+        srv_start_tx_frame(srv, srv->link.rx_buffer, OLNK_LEN_GENERIC_IOCTL_MID, false);
         return;
     }
 
@@ -504,12 +504,14 @@ static void handle_read_sectors(olnk_server_t *srv, const uint8_t *buf, uint16_t
     }
     first_secs = (req.sector_count > max_secs_per_frame) ? max_secs_per_frame : req.sector_count;
 
-    /* Pre-read first chunk before committing to status == DONE */
+    /* Pre-read first chunk before committing to status == DONE.
+     * Half-duplex: req was already decoded out of srv->link.rx_buffer above,
+     * and the server immediately enters WAIT_TURNAROUND (no RX payload writes). */
     st = srv->storage.read_sectors(
         req.unit,
         lba,
         first_secs,
-        srv->tx_data_buf,
+        srv->link.rx_buffer,
         &xfer,
         srv->storage.user_data
     );
@@ -807,7 +809,7 @@ static void handle_generic_ioctl_header(olnk_server_t *srv, const uint8_t *buf, 
             mid.serial_number = info.volume_serial;
             olnk_label_pad_copy(mid.volume_label, sizeof(mid.volume_label), info.volume_label);
             olnk_label_pad_copy(mid.filesystem_type, sizeof(mid.filesystem_type), info.filesystem_type);
-            (void)olnk_encode_generic_ioctl_mid(&mid, srv->tx_data_buf, sizeof(srv->tx_data_buf), &mid_len);
+            (void)olnk_encode_generic_ioctl_mid(&mid, srv->link.rx_buffer, OLNK_MAX_PAYLOAD_SIZE, &mid_len);
             (void)olnk_encode_status_only_resp(
                 OLNK_DOS_STATUS_DONE,
                 srv->tx_ctrl_buf,
@@ -1461,6 +1463,8 @@ void olnk_server_tick(olnk_server_t *srv, uint32_t elapsed_ms) {
 
         case OLNK_SRV_WAIT_TURNAROUND:
             if (srv->state_elapsed_ms >= 2000UL) {
+                srv->read_prefetched_valid = false;
+                srv->read_sectors_remaining = 0U;
                 srv->resp_phase = (uint8_t)OLNK_RESP_NONE;
                 srv->req_phase = (uint8_t)OLNK_REQ_PHASE_CMD;
                 srv->srv_state = (uint8_t)OLNK_SRV_IDLE_RX;

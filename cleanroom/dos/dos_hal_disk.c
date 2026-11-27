@@ -9,7 +9,6 @@
 #include <string.h>
 
 #if defined(__WATCOMC__) && defined(__DOS__)
-#include <i86.h>
 
 /* MS-DOS 4.0+ Extended Disk I/O Packet (10 bytes, packed) */
 #pragma pack(push, 1)
@@ -97,11 +96,10 @@ static uint16_t watcom_int26_std(uint8_t drive, uint16_t count, uint16_t lba16, 
     value [ax]                 \
     modify [bx cx dx si di];
 
-static uint16_t dos_get_ds(void) {
-    struct SREGS sregs;
-    segread(&sregs);
-    return sregs.ds;
-}
+static uint16_t dos_get_ds(void);
+#pragma aux dos_get_ds = \
+    "mov ax, ds"         \
+    value [ax];
 #endif /* __WATCOMC__ && __DOS__ */
 
 static uint16_t hw_abs_read(

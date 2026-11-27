@@ -3,45 +3,25 @@
  * Clean-room 16-bit Real-Mode MS-DOS OPENLNK.EXE client utility.
  * Connects over COM1..COM4 (8250/16550A HAL) to opensvr or MS-DOS 6.22
  * INTERSVR.EXE, displays mapped remote drives/BPBs, lists remote FAT12/FAT16
- * directories (/DIR), and downloads files (/GET) with zero dynamic allocation.
+ * directories (/DIR), and downloads files (/GET) via direct INT 21h I/O
+ * with zero dynamic allocation and zero stdio/ctype CRT overhead.
  *
- * Compiled via Open Watcom v2 (-ms -0 -za99 -wx -we -os -bt=dos) for 8086/8088.
+ * Compiled via Open Watcom v2 (-ms -0 -za99 -wx -we -os -zm -s -bt=dos) for 8086/8088.
  */
+#include "dos_hal_io.h"
 #include "dos_hal_uart.h"
 #include "openlnk/client.h"
 
-#include <ctype.h>
-#include <stdio.h>
 #include <string.h>
 
-/* Static buffers (16-bit Real-Mode Small Model safe — never on stack!) */
+/* Static buffers (16-bit Real-Mode Small Model safe — never on stack!).
+ * olnk_client_* always receives directly into caller buffers or ctrl_buf, never
+ * into link.rx_buffer, so sector & FAT scratch slices reuse link.rx_buffer
+ * (saving 1536 bytes of conventional DOS RAM). */
 static olnk_client_t g_dos_client;
 static olnk_dos_uart_t g_dos_uart;
-static uint8_t g_sec_buf[OLNK_SECTOR_SIZE];
-static uint8_t g_fat_cache[OLNK_SECTOR_SIZE * 2U];
-
-static uint32_t parse_u32_ascii(const char *s) {
-    uint32_t val = 0UL;
-    if (s == NULL) {
-        return 0UL;
-    }
-    while ((*s >= '0') && (*s <= '9')) {
-        val = (val * 10UL) + (uint32_t)(*s - '0');
-        ++s;
-    }
-    return val;
-}
-
-static bool str_ieq_prefix(const char *s, const char *prefix) {
-    while (*prefix != '\0') {
-        if (toupper((unsigned char)*s) != toupper((unsigned char)*prefix)) {
-            return false;
-        }
-        ++s;
-        ++prefix;
-    }
-    return true;
-}
+#define g_sec_buf   (&g_dos_client.link.rx_buffer[0])
+#define g_fat_cache (&g_dos_client.link.rx_buffer[OLNK_SECTOR_SIZE])
 
 static void format_83(const uint8_t ent[32], char out[16]) {
     size_t pos = 0U;
@@ -72,7 +52,7 @@ static void make_83_pat(const char *name, uint8_t pat[11]) {
     size_t d = 0U;
     memset(pat, ' ', 11U);
     while ((name[i] != '\0') && (name[i] != '.') && (d < 8U)) {
-        pat[d++] = (uint8_t)toupper((unsigned char)name[i++]);
+        pat[d++] = (uint8_t)olnk_ascii_toupper(name[i++]);
     }
     while ((name[i] != '\0') && (name[i] != '.')) {
         ++i;
@@ -81,7 +61,7 @@ static void make_83_pat(const char *name, uint8_t pat[11]) {
         ++i;
         d = 8U;
         while ((name[i] != '\0') && (d < 11U)) {
-            pat[d++] = (uint8_t)toupper((unsigned char)name[i++]);
+            pat[d++] = (uint8_t)olnk_ascii_toupper(name[i++]);
         }
     }
 }
@@ -105,11 +85,18 @@ static bool dos_select_unit(uint8_t *out_unit) {
 
 static void dos_cmd_info(void) {
     size_t i;
-    printf("Connected @ %lu bps | Server DOS %u.%02u | max_block=%u\n",
-           (unsigned long)olnk_baud_index_to_bps(g_dos_client.link.current_baud_idx),
-           (unsigned int)g_dos_client.map.server_dos_major,
-           (unsigned int)g_dos_client.map.server_dos_minor,
-           (unsigned int)g_dos_client.link.max_block_size);
+    olnk_dos_puts("Connected @ ");
+    olnk_dos_put_u32(olnk_baud_index_to_bps(g_dos_client.link.current_baud_idx));
+    olnk_dos_puts(" bps | Server DOS ");
+    olnk_dos_put_u32((uint32_t)g_dos_client.map.server_dos_major);
+    olnk_dos_putc('.');
+    if (g_dos_client.map.server_dos_minor < 10U) {
+        olnk_dos_putc('0');
+    }
+    olnk_dos_put_u32((uint32_t)g_dos_client.map.server_dos_minor);
+    olnk_dos_puts(" | max_block=");
+    olnk_dos_put_u32((uint32_t)g_dos_client.link.max_block_size);
+    olnk_dos_putc('\n');
 
     for (i = 0U; i < OLNK_MAX_DRIVES; ++i) {
         uint8_t entry = g_dos_client.map.drive_map_resp[i];
@@ -121,10 +108,13 @@ static void dos_cmd_info(void) {
         u = (uint8_t)(entry & 0x7FU);
         memset(&info, 0, sizeof(info));
         (void)olnk_client_get_drive_info(&g_dos_client, u, &info);
-        printf("  Remote %c: -> %s '%s'\n",
-               (char)('A' + (char)u),
-               info.size_string,
-               info.volume_label);
+        olnk_dos_puts("  Remote ");
+        olnk_dos_putc((char)('A' + (char)u));
+        olnk_dos_puts(": -> ");
+        olnk_dos_puts(info.size_string);
+        olnk_dos_puts(" '");
+        olnk_dos_puts(info.volume_label);
+        olnk_dos_puts("'\n");
     }
 }
 
@@ -137,7 +127,11 @@ static int dos_cmd_dir(uint8_t unit) {
 
     if ((olnk_client_build_bpb(&g_dos_client, unit, 0xF8U, &bpb) != OLNK_OK) ||
         ((bpb.status & OLNK_DOS_STATUS_ERROR) != 0U) || (!bpb.has_bpb)) {
-        printf("Drive %c: not ready (0x%04X)\n", (char)('A' + (char)unit), (unsigned int)bpb.status);
+        olnk_dos_puts("Drive ");
+        olnk_dos_putc((char)('A' + (char)unit));
+        olnk_dos_puts(": not ready (0x");
+        olnk_dos_put_hex16(bpb.status);
+        olnk_dos_puts(")\n");
         return 1;
     }
 
@@ -146,12 +140,14 @@ static int dos_cmd_dir(uint8_t unit) {
     root_secs = ((uint32_t)bpb.bpb.root_entries * 32UL + (uint32_t)OLNK_SECTOR_SIZE - 1UL) /
                 (uint32_t)OLNK_SECTOR_SIZE;
 
-    printf("Directory of remote %c:\\\n", (char)('A' + (char)unit));
+    olnk_dos_puts("Directory of remote ");
+    olnk_dos_putc((char)('A' + (char)unit));
+    olnk_dos_puts(":\\\n");
     for (s = 0UL; s < root_secs; ++s) {
         size_t off;
         if ((olnk_client_read_sectors(
                  &g_dos_client, unit, bpb.bpb.media_descriptor, root_lba + s, 1U,
-                 OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)sizeof(g_sec_buf), &ior) != OLNK_OK) ||
+                 OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)OLNK_SECTOR_SIZE, &ior) != OLNK_OK) ||
             ((ior.status & OLNK_DOS_STATUS_ERROR) != 0U)) {
             return 1;
         }
@@ -165,10 +161,14 @@ static int dos_cmd_dir(uint8_t unit) {
                 continue;
             }
             format_83(e, nm);
+            olnk_dos_puts("  ");
+            olnk_dos_put_str_pad(nm, 13U);
             if ((e[11] & 0x10U) != 0U) {
-                printf("  %-13s <DIR>\n", nm);
+                olnk_dos_puts(" <DIR>\n");
             } else {
-                printf("  %-13s %lu\n", nm, (unsigned long)olnk_read_u32_le(&e[28]));
+                olnk_dos_putc(' ');
+                olnk_dos_put_u32(olnk_read_u32_le(&e[28]));
+                olnk_dos_putc('\n');
             }
         }
     }
@@ -197,7 +197,7 @@ static bool dos_fat_next(
         uint16_t cnt = ((fsec + 2UL) <= fat_end) ? 2U : 1U;
         if ((olnk_client_read_sectors(
                  &g_dos_client, unit, bpb->media_descriptor, fsec, cnt,
-                 OLNK_SECTOR_SIZE, g_fat_cache, (uint32_t)sizeof(g_fat_cache), &ior) != OLNK_OK) ||
+                 OLNK_SECTOR_SIZE, g_fat_cache, (uint32_t)(OLNK_SECTOR_SIZE * 2U), &ior) != OLNK_OK) ||
             ((ior.status & OLNK_DOS_STATUS_ERROR) != 0U)) {
             return false;
         }
@@ -227,11 +227,13 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
     bool found = false;
     uint32_t fat_cache_lba = 0UL;
     uint16_t fat_cache_secs = 0U;
-    FILE *fp;
+    olnk_dos_file_t out_file;
 
     if ((olnk_client_build_bpb(&g_dos_client, unit, 0xF8U, &bpb) != OLNK_OK) ||
         ((bpb.status & OLNK_DOS_STATUS_ERROR) != 0U) || (!bpb.has_bpb)) {
-        printf("Drive %c: not ready\n", (char)('A' + (char)unit));
+        olnk_dos_puts("Drive ");
+        olnk_dos_putc((char)('A' + (char)unit));
+        olnk_dos_puts(": not ready\n");
         return 1;
     }
 
@@ -244,7 +246,9 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
                      ? (uint32_t)bpb.bpb.total_sectors_16
                      : bpb.bpb.total_sectors_32;
     if ((bpb.bpb.sectors_per_cluster == 0U) || (total_secs <= data_lba)) {
-        printf("Invalid FAT BPB on drive %c:\n", (int)('A' + (int)unit));
+        olnk_dos_puts("Invalid FAT BPB on drive ");
+        olnk_dos_putc((char)('A' + (char)unit));
+        olnk_dos_puts(":\n");
         return 1;
     }
     is_fat12 = (((total_secs - data_lba) / (uint32_t)bpb.bpb.sectors_per_cluster) < 4085UL);
@@ -254,7 +258,7 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
         size_t off;
         if ((olnk_client_read_sectors(
                  &g_dos_client, unit, bpb.bpb.media_descriptor, root_lba + s, 1U,
-                 OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)sizeof(g_sec_buf), &ior) != OLNK_OK) ||
+                 OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)OLNK_SECTOR_SIZE, &ior) != OLNK_OK) ||
             ((ior.status & OLNK_DOS_STATUS_ERROR) != 0U)) {
             return 1;
         }
@@ -276,13 +280,16 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
     }
 
     if (!found) {
-        printf("File not found: %s\n", remote_name);
+        olnk_dos_puts("File not found: ");
+        olnk_dos_puts(remote_name);
+        olnk_dos_putc('\n');
         return 1;
     }
 
-    fp = fopen(local_name, "wb");
-    if (fp == NULL) {
-        printf("Cannot create %s\n", local_name);
+    if (!olnk_dos_file_create(&out_file, local_name)) {
+        olnk_dos_puts("Cannot create ");
+        olnk_dos_puts(local_name);
+        olnk_dos_putc('\n');
         return 1;
     }
 
@@ -293,36 +300,46 @@ static int dos_cmd_get(uint8_t unit, const char *remote_name, const char *local_
             size_t to_w = (remain > (uint32_t)OLNK_SECTOR_SIZE) ? (size_t)OLNK_SECTOR_SIZE : (size_t)remain;
             if ((olnk_client_read_sectors(
                      &g_dos_client, unit, bpb.bpb.media_descriptor, cl_lba + (uint32_t)k, 1U,
-                     OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)sizeof(g_sec_buf), &ior) != OLNK_OK) ||
+                     OLNK_SECTOR_SIZE, g_sec_buf, (uint32_t)OLNK_SECTOR_SIZE, &ior) != OLNK_OK) ||
                 ((ior.status & OLNK_DOS_STATUS_ERROR) != 0U) ||
-                (fwrite(g_sec_buf, 1U, to_w, fp) != to_w)) {
-                fclose(fp);
+                (olnk_dos_file_write(&out_file, g_sec_buf, to_w) != to_w)) {
+                (void)olnk_dos_file_close(&out_file);
                 return 1;
             }
             remain -= (uint32_t)to_w;
         }
         if (remain > 0UL) {
             if (!dos_fat_next(unit, &bpb.bpb, is_fat12, cur_c, &fat_cache_lba, &fat_cache_secs, &cur_c)) {
-                fclose(fp);
+                (void)olnk_dos_file_close(&out_file);
                 return 1;
             }
         }
     }
 
-    fclose(fp);
-    printf("Copied %c:\\%s -> %s\n", (char)('A' + (char)unit), remote_name, local_name);
+    if (!olnk_dos_file_close(&out_file)) {
+        return 1;
+    }
+    olnk_dos_puts("Copied ");
+    olnk_dos_putc((char)('A' + (char)unit));
+    olnk_dos_puts(":\\");
+    olnk_dos_puts(remote_name);
+    olnk_dos_puts(" -> ");
+    olnk_dos_puts(local_name);
+    olnk_dos_putc('\n');
     return 0;
 }
 
 static void print_usage(void) {
-    printf("OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode MS-DOS 6.22 client)\n");
-    printf("Usage:\n");
-    printf("  OPENLNK [/COM1../COM4] [/BAUD:rate]            Show remote drives\n");
-    printf("  OPENLNK [/COM1] /DIR [C:]                      List remote root directory\n");
-    printf("  OPENLNK [/COM1] /GET <file> [local] [C:]       Download file from remote server\n");
+    olnk_dos_puts(
+        "OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode MS-DOS 6.22 client)\n"
+        "Usage:\n"
+        "  OPENLNK [/COM1../COM4] [/BAUD:rate]            Show remote drives\n"
+        "  OPENLNK [/COM1] /DIR [C:]                      List remote root directory\n"
+        "  OPENLNK [/COM1] /GET <file> [local] [C:]       Download file from remote server\n"
+    );
 }
 
-int main(int argc, char **argv) {
+int OLNK_DOS_MAIN_FN(int argc, char **argv) {
     uint8_t com_num = 1U;
     uint32_t max_baud = 115200UL;
     uint8_t max_baud_idx = (uint8_t)OLNK_BAUD_115200;
@@ -338,25 +355,27 @@ int main(int argc, char **argv) {
 
     for (i = 1; i < argc; ++i) {
         const char *arg = argv[i];
-        if ((strcmp(arg, "/?") == 0) || str_ieq_prefix(arg, "/HELP") ||
+        if ((strcmp(arg, "/?") == 0) || olnk_ascii_ieq_prefix(arg, "/HELP") ||
             (strcmp(arg, "--help") == 0) || (strcmp(arg, "-h") == 0)) {
             print_usage();
             return 0;
         }
-        if (str_ieq_prefix(arg, "/COM") && (arg[4] >= '1') && (arg[4] <= '4') && (arg[5] == '\0')) {
+        if (olnk_ascii_ieq_prefix(arg, "/COM") && (arg[4] >= '1') && (arg[4] <= '4') && (arg[5] == '\0')) {
             com_num = (uint8_t)(arg[4] - '0');
-        } else if (str_ieq_prefix(arg, "/BAUD:")) {
-            max_baud = parse_u32_ascii(&arg[6]);
+        } else if (olnk_ascii_ieq_prefix(arg, "/BAUD:")) {
+            max_baud = olnk_ascii_parse_u32(&arg[6]);
             if (!olnk_bps_to_baud_index(max_baud, &max_baud_idx)) {
-                printf("Unsupported baud rate: %lu\n", (unsigned long)max_baud);
+                olnk_dos_puts("Unsupported baud rate: ");
+                olnk_dos_put_u32(max_baud);
+                olnk_dos_putc('\n');
                 return 2;
             }
-        } else if (str_ieq_prefix(arg, "/DIR") && (arg[4] == '\0')) {
+        } else if (olnk_ascii_ieq_prefix(arg, "/DIR") && (arg[4] == '\0')) {
             mode_dir = true;
-        } else if (str_ieq_prefix(arg, "/GET") && (arg[4] == '\0')) {
+        } else if (olnk_ascii_ieq_prefix(arg, "/GET") && (arg[4] == '\0')) {
             mode_get = true;
-        } else if (isalpha((unsigned char)arg[0]) && (arg[1] == ':') && (arg[2] == '\0')) {
-            unit = (uint8_t)(toupper((unsigned char)arg[0]) - 'A');
+        } else if (olnk_ascii_isalpha(arg[0]) && (arg[1] == ':') && (arg[2] == '\0')) {
+            unit = (uint8_t)(olnk_ascii_toupper(arg[0]) - 'A');
             unit_set = true;
         } else if (mode_get && (get_remote == NULL)) {
             get_remote = arg;
@@ -366,7 +385,9 @@ int main(int argc, char **argv) {
     }
 
     if (olnk_dos_uart_init(&g_dos_uart, com_num, 0U, 9600UL, NULL, &tr) != OLNK_OK) {
-        printf("Failed to initialize COM%u\n", (unsigned int)com_num);
+        olnk_dos_puts("Failed to initialize COM");
+        olnk_dos_put_u32((uint32_t)com_num);
+        olnk_dos_putc('\n');
         return 1;
     }
     if (olnk_client_init(&g_dos_client, tr) != OLNK_OK) {
@@ -376,13 +397,16 @@ int main(int argc, char **argv) {
 
 #if defined(__WATCOMC__) && defined(__DOS__)
     if (olnk_client_connect(&g_dos_client, 15U) != OLNK_OK) {
-        printf("No server response on COM%u (0x%03X)\n",
-               (unsigned int)com_num, (unsigned int)g_dos_uart.io_base);
+        olnk_dos_puts("No server response on COM");
+        olnk_dos_put_u32((uint32_t)com_num);
+        olnk_dos_puts(" (0x");
+        olnk_dos_put_hex16(g_dos_uart.io_base);
+        olnk_dos_puts(")\n");
         return 1;
     }
     if ((olnk_client_session_sync(&g_dos_client, false, &sresp) != OLNK_OK) ||
         (olnk_client_map_config(&g_dos_client, 8U, 3U, NULL) != OLNK_OK)) {
-        printf("Session handshake failed\n");
+        olnk_dos_puts("Session handshake failed\n");
         return 1;
     }
     if (!unit_set) {
@@ -407,7 +431,7 @@ int main(int argc, char **argv) {
     (void)dos_cmd_info;
     (void)dos_cmd_dir;
     (void)dos_cmd_get;
-    printf("OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode client ready)\n");
+    olnk_dos_puts("OPENLNK 0.2.0 (libopenlnk 16-bit Real-Mode client ready)\n");
 #endif
     return 0;
 }

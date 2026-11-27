@@ -29,8 +29,8 @@ openlnk-vector-check: desktop/vector_check.c libopenlnk.a
 test_libopenlnk: tests/test_libopenlnk.c libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_libopenlnk.c libopenlnk.a -o $@
 
-test_dos_hal: tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/openlnk_sys_stub.c libopenlnk.a
-	$(CC) $(CFLAGS) $(INCLUDES) -Idos tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/openlnk_sys_stub.c libopenlnk.a -o $@
+test_dos_hal: tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/dos_hal_io.c dos/openlnk_sys_stub.c libopenlnk.a
+	$(CC) $(CFLAGS) $(INCLUDES) -Idos tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/dos_hal_io.c dos/openlnk_sys_stub.c libopenlnk.a -o $@
 
 test: all
 	./test_libopenlnk

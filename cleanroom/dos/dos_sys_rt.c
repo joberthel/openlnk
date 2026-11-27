@@ -1,8 +1,9 @@
 /* cleanroom/dos/dos_sys_rt.c
  *
- * Minimal freestanding Zero-CRT memory primitives (memset, memcpy, memcmp)
- * linked exclusively into the 16-bit Real-Mode OPENLNK.SYS device driver so
- * Open Watcom produces a 100% self-contained binary with zero clibs.lib usage.
+ * Minimal freestanding Zero-CRT memory/string primitives (memset, memcpy,
+ * memcmp, strcmp) linked into the 16-bit Real-Mode DOS targets (OPENLNK.SYS,
+ * OPENSVR.EXE, OPENLNK.EXE) so Open Watcom produces 100% self-contained
+ * binaries with zero clibs.lib usage.
  *
  * Strictly ISO C99, zero dynamic allocation, zero floating-point, 8086 safe.
  */
@@ -39,4 +40,17 @@ int memcmp(const void *lhs, const void *rhs, size_t len) {
         }
     }
     return 0;
+}
+
+int strcmp(const char *lhs, const char *rhs) {
+    const uint8_t *a = (const uint8_t *)lhs;
+    const uint8_t *b = (const uint8_t *)rhs;
+    while ((*a != 0U) && (*a == *b)) {
+        ++a;
+        ++b;
+    }
+    if (*a == *b) {
+        return 0;
+    }
+    return (*a < *b) ? -1 : 1;
 }

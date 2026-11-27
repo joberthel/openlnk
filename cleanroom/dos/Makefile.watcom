@@ -1,8 +1,8 @@
 # cleanroom/dos/Makefile.watcom
 # Cross-compile libopenlnk 16-bit Real-Mode MS-DOS targets (8.3 compliant)
-# using Open Watcom v2:
-#   - OPENSVR.EXE  (16-bit DOS server with 8250/16550A + INT 25h/26h HAL)
-#   - OPENLNK.EXE  (16-bit DOS client CLI with 8250/16550A HAL)
+# using Open Watcom v2 — 100% Zero-CRT across all three targets:
+#   - OPENSVR.EXE  (16-bit DOS server with 8250/16550A + INT 25h/26h + INT 21h HAL)
+#   - OPENLNK.EXE  (16-bit DOS client CLI with 8250/16550A + INT 21h HAL)
 #   - OPENLNK.SYS  (16-bit Real-Mode MS-DOS Block Device Driver, zero-CRT, <= 64 KiB)
 #
 # Expected environment:
@@ -21,9 +21,12 @@ WLIB    = wlib
 # -wx   : Maximum warning level
 # -we   : Treat warnings as errors
 # -os   : Optimize for size
-CFLAGS     = -ms -0 -za99 -wx -we -os -bt=dos -i=../include
-SYS_CFLAGS = $(CFLAGS) -zl -s
-ASFLAGS    = -0 -ms -wx -we -q
+# -zm   : Place each function in its own COMDAT segment for linker dead-code elimination
+# -s    : Omit __STK stack-probe calls (all large contexts are static, never on stack)
+# -zl   : Omit default clibs.lib request (all 3 targets are 100% freestanding Zero-CRT)
+MAX_PAYLOAD ?= 8192
+CFLAGS      = -ms -0 -za99 -wx -we -os -zm -s -zl -bt=dos -DOLNK_MAX_PAYLOAD_SIZE=$(MAX_PAYLOAD)U -i=../include
+ASFLAGS     = -0 -ms -wx -we -q
 
 BUILD_DIR = build
 
@@ -35,19 +38,26 @@ CORE_OBJS = \
 	$(BUILD_DIR)/server.obj \
 	$(BUILD_DIR)/client.obj
 
+EXE_CRT_OBJS = \
+	$(BUILD_DIR)/dos_exe_crt0.obj \
+	$(BUILD_DIR)/dos_sys_rt.obj
+
 DOS_HAL_OBJS = \
 	$(BUILD_DIR)/dos_hal_uart.obj \
-	$(BUILD_DIR)/dos_hal_disk.obj
+	$(BUILD_DIR)/dos_hal_disk.obj \
+	$(BUILD_DIR)/dos_hal_io.obj
 
 SYS_OBJS = \
 	$(BUILD_DIR)/openlnk_sys_entry.obj \
-	$(BUILD_DIR)/sys_openlnk_sys_stub.obj \
-	$(BUILD_DIR)/sys_dos_sys_rt.obj \
-	$(BUILD_DIR)/sys_dos_hal_uart.obj \
-	$(BUILD_DIR)/sys_openlnk.obj \
-	$(BUILD_DIR)/sys_client.obj \
-	$(BUILD_DIR)/sys_protocol.obj \
-	$(BUILD_DIR)/sys_crc16.obj
+	$(BUILD_DIR)/openlnk_sys_stub.obj \
+	$(BUILD_DIR)/dos_sys_rt.obj \
+	$(BUILD_DIR)/dos_hal_uart.obj \
+	$(BUILD_DIR)/openlnk.obj \
+	$(BUILD_DIR)/client.obj \
+	$(BUILD_DIR)/protocol.obj \
+	$(BUILD_DIR)/crc16.obj
+
+EXE_ORDER = order clname CODE segment BEGTEXT clname BEGDATA clname DATA clname BSSBEG clname BSS clname BSSEND clname STACK
 
 all: $(BUILD_DIR) $(BUILD_DIR)/OPENSVR.EXE $(BUILD_DIR)/OPENLNK.EXE $(BUILD_DIR)/OPENLNK.SYS
 
@@ -72,54 +82,54 @@ $(BUILD_DIR)/server.obj: ../src/server.c
 $(BUILD_DIR)/client.obj: ../src/client.c
 	$(CC) $(CFLAGS) -fo=$@ ../src/client.c
 
+$(BUILD_DIR)/dos_exe_crt0.obj: dos_exe_crt0.asm
+	$(AS) $(ASFLAGS) -fo=$@ dos_exe_crt0.asm
+
+$(BUILD_DIR)/dos_sys_rt.obj: dos_sys_rt.c
+	$(CC) $(CFLAGS) -fo=$@ dos_sys_rt.c
+
 $(BUILD_DIR)/dos_hal_uart.obj: dos_hal_uart.c dos_hal_uart.h
 	$(CC) $(CFLAGS) -fo=$@ dos_hal_uart.c
 
 $(BUILD_DIR)/dos_hal_disk.obj: dos_hal_disk.c dos_hal_disk.h
 	$(CC) $(CFLAGS) -fo=$@ dos_hal_disk.c
 
+$(BUILD_DIR)/dos_hal_io.obj: dos_hal_io.c dos_hal_io.h
+	$(CC) $(CFLAGS) -fo=$@ dos_hal_io.c
+
 $(BUILD_DIR)/libolnk.lib: $(CORE_OBJS)
 	$(WLIB) -q -n -b $@ +$(BUILD_DIR)/openlnk.obj +$(BUILD_DIR)/crc16.obj +$(BUILD_DIR)/protocol.obj +$(BUILD_DIR)/storage_mem.obj +$(BUILD_DIR)/server.obj +$(BUILD_DIR)/client.obj
 
-$(BUILD_DIR)/opensvr_main.obj: opensvr_main.c dos_hal_uart.h dos_hal_disk.h
+$(BUILD_DIR)/opensvr_main.obj: opensvr_main.c dos_hal_uart.h dos_hal_disk.h dos_hal_io.h
 	$(CC) $(CFLAGS) -fo=$@ opensvr_main.c
 
-$(BUILD_DIR)/openlnk_main.obj: openlnk_main.c dos_hal_uart.h
+$(BUILD_DIR)/openlnk_main.obj: openlnk_main.c dos_hal_uart.h dos_hal_io.h
 	$(CC) $(CFLAGS) -fo=$@ openlnk_main.c
 
-$(BUILD_DIR)/OPENSVR.EXE: $(BUILD_DIR)/opensvr_main.obj $(DOS_HAL_OBJS) $(BUILD_DIR)/libolnk.lib
-	$(WLINK) system dos option quiet option stack=4096 name $@ file $(BUILD_DIR)/opensvr_main.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/dos_hal_disk.obj library $(BUILD_DIR)/libolnk.lib
+$(BUILD_DIR)/OPENSVR.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/opensvr_main.obj $(DOS_HAL_OBJS) $(BUILD_DIR)/libolnk.lib
+	$(WLINK) system dos option quiet option nodefaultlibs option eliminate option start=_exe_start option stack=3072 option map=$(BUILD_DIR)/OPENSVR.MAP $(EXE_ORDER) name $@ file $(BUILD_DIR)/dos_exe_crt0.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/opensvr_main.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/dos_hal_disk.obj file $(BUILD_DIR)/dos_hal_io.obj library $(BUILD_DIR)/libolnk.lib
 
-$(BUILD_DIR)/OPENLNK.EXE: $(BUILD_DIR)/openlnk_main.obj $(BUILD_DIR)/dos_hal_uart.obj $(BUILD_DIR)/libolnk.lib
-	$(WLINK) system dos option quiet option stack=4096 name $@ file $(BUILD_DIR)/openlnk_main.obj file $(BUILD_DIR)/dos_hal_uart.obj library $(BUILD_DIR)/libolnk.lib
+$(BUILD_DIR)/OPENLNK.EXE: $(EXE_CRT_OBJS) $(BUILD_DIR)/openlnk_main.obj $(BUILD_DIR)/dos_hal_uart.obj $(BUILD_DIR)/dos_hal_io.obj $(BUILD_DIR)/libolnk.lib
+	$(WLINK) system dos option quiet option nodefaultlibs option eliminate option start=_exe_start option stack=3072 option map=$(BUILD_DIR)/OPENLNKX.MAP $(EXE_ORDER) name $@ file $(BUILD_DIR)/dos_exe_crt0.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/openlnk_main.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/dos_hal_io.obj library $(BUILD_DIR)/libolnk.lib
 
-# Freestanding Zero-CRT OPENLNK.SYS Block Device Driver objects (-zl -s)
+# Freestanding Zero-CRT OPENLNK.SYS Block Device Driver
 $(BUILD_DIR)/openlnk_sys_entry.obj: openlnk_sys_entry.asm
 	$(AS) $(ASFLAGS) -fo=$@ openlnk_sys_entry.asm
 
-$(BUILD_DIR)/sys_openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h
-	$(CC) $(SYS_CFLAGS) -fo=$@ openlnk_sys_stub.c
-
-$(BUILD_DIR)/sys_dos_sys_rt.obj: dos_sys_rt.c
-	$(CC) $(SYS_CFLAGS) -fo=$@ dos_sys_rt.c
-
-$(BUILD_DIR)/sys_dos_hal_uart.obj: dos_hal_uart.c dos_hal_uart.h
-	$(CC) $(SYS_CFLAGS) -fo=$@ dos_hal_uart.c
-
-$(BUILD_DIR)/sys_openlnk.obj: ../src/openlnk.c
-	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/openlnk.c
-
-$(BUILD_DIR)/sys_client.obj: ../src/client.c
-	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/client.c
-
-$(BUILD_DIR)/sys_protocol.obj: ../src/protocol.c
-	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/protocol.c
-
-$(BUILD_DIR)/sys_crc16.obj: ../src/crc16.c
-	$(CC) $(SYS_CFLAGS) -fo=$@ ../src/crc16.c
+$(BUILD_DIR)/openlnk_sys_stub.obj: openlnk_sys_stub.c openlnk_sys.h dos_hal_uart.h
+	$(CC) $(CFLAGS) -fo=$@ openlnk_sys_stub.c
 
 $(BUILD_DIR)/OPENLNK.SYS: $(SYS_OBJS)
-	$(WLINK) format raw bin option quiet option nodefaultlibs option map=$(BUILD_DIR)/OPENLNK.MAP order clname CODE clname DATA clname BSS clname BSSEND clname STACK name $@ file $(BUILD_DIR)/openlnk_sys_entry.obj file $(BUILD_DIR)/sys_openlnk_sys_stub.obj file $(BUILD_DIR)/sys_dos_sys_rt.obj file $(BUILD_DIR)/sys_dos_hal_uart.obj file $(BUILD_DIR)/sys_openlnk.obj file $(BUILD_DIR)/sys_client.obj file $(BUILD_DIR)/sys_protocol.obj file $(BUILD_DIR)/sys_crc16.obj
+	$(WLINK) format raw bin option quiet option nodefaultlibs option eliminate option start=_sys_dev_header option map=$(BUILD_DIR)/OPENLNK.MAP order clname CODE segment SYS_HEAD clname DATA clname BSS noemit clname BSSEND noemit clname STACK noemit name $@ file $(BUILD_DIR)/openlnk_sys_entry.obj file $(BUILD_DIR)/openlnk_sys_stub.obj file $(BUILD_DIR)/dos_sys_rt.obj file $(BUILD_DIR)/dos_hal_uart.obj file $(BUILD_DIR)/openlnk.obj file $(BUILD_DIR)/client.obj file $(BUILD_DIR)/protocol.obj file $(BUILD_DIR)/crc16.obj
+	@bss_hex=$$(awk '/_sys_bss_start/ { sub(/\*$$/, "", $$1); print $$1; exit }' $(BUILD_DIR)/OPENLNK.MAP); \
+	bss_dec=$$((0x$$bss_hex)); \
+	fsize=$$(wc -c < $@ | tr -d ' '); \
+	if [ "$$fsize" -lt "$$bss_dec" ]; then \
+		dd if=/dev/zero bs=1 count=$$((bss_dec - fsize)) >> $@ 2>/dev/null; \
+	elif [ "$$fsize" -gt "$$bss_dec" ]; then \
+		echo "ERROR: $@ ($$fsize B) exceeds _sys_bss_start ($$bss_dec B / 0x$$bss_hex)" >&2; \
+		exit 1; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)

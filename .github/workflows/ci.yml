@@ -119,15 +119,33 @@ jobs:
           test -f cleanroom/dos/build/OPENSVR.EXE
           test -f cleanroom/dos/build/OPENLNK.EXE
           test -f cleanroom/dos/build/OPENLNK.SYS
+          test -f cleanroom/dos/build/OPENSVR.MAP
+          test -f cleanroom/dos/build/OPENLNKX.MAP
           test -f cleanroom/dos/build/OPENLNK.MAP
           python3 -c "
-          import struct
-          for bin_path in ('cleanroom/dos/build/OPENSVR.EXE', 'cleanroom/dos/build/OPENLNK.EXE'):
+          import os, re, struct
+          for bin_path, map_path, max_disk in (
+              ('cleanroom/dos/build/OPENSVR.EXE', 'cleanroom/dos/build/OPENSVR.MAP', 17408),
+              ('cleanroom/dos/build/OPENLNK.EXE', 'cleanroom/dos/build/OPENLNKX.MAP', 13312),
+          ):
               data = open(bin_path, 'rb').read(2)
+              sz = os.path.getsize(bin_path)
+              map_txt = open(map_path, 'r', errors='replace').read()
               assert data == b'MZ', f'Expected DOS MZ header in {bin_path}, got {data!r}'
-              print(f'Verified DOS MZ header: {bin_path}')
+              assert sz <= max_disk, f'{bin_path} ({sz} B) exceeds size budget ({max_disk} B)'
+              assert 'clibs.lib' not in map_txt.lower(), f'Unexpected clibs.lib link in {map_path}'
+              print(f'Verified Zero-CRT DOS MZ: {bin_path} ({sz} B <= {max_disk} B)')
           sys_data = open('cleanroom/dos/build/OPENLNK.SYS', 'rb').read()
-          assert len(sys_data) >= 18 and len(sys_data) < 65535, f'Invalid OPENLNK.SYS size: {len(sys_data)}'
+          sys_map = open('cleanroom/dos/build/OPENLNK.MAP', 'r', errors='replace').read()
+          assert 'clibs.lib' not in sys_map.lower(), 'Unexpected clibs.lib link in OPENLNK.MAP'
+          bss_m = re.search(r'^([0-9a-fA-F]+)\*?\+?\s+_sys_bss_start$', sys_map, re.M)
+          res_m = re.search(r'^([0-9a-fA-F]+)\*?\+?\s+_sys_resident_end$', sys_map, re.M)
+          assert bss_m and res_m, 'Missing _sys_bss_start or _sys_resident_end in OPENLNK.MAP'
+          bss_start = int(bss_m.group(1), 16)
+          res_end = int(res_m.group(1), 16)
+          assert len(sys_data) == bss_start, f'OPENLNK.SYS disk ({len(sys_data)} B) != _sys_bss_start ({bss_start} B)'
+          assert len(sys_data) <= 15360, f'OPENLNK.SYS disk ({len(sys_data)} B) exceeds 15 KiB budget'
+          assert res_end <= 28672 and res_end < 65535, f'OPENLNK.SYS resident RAM ({res_end} B) exceeds 28 KiB budget'
           nxt, attr, strat, intr, units = struct.unpack_from('<IHHHB', sys_data, 0)
           sig = sys_data[11:18]
           assert nxt == 0xFFFFFFFF, f'Expected FF FF FF FF header, got 0x{nxt:08X}'
@@ -135,7 +153,7 @@ jobs:
           assert 0x0012 <= strat < len(sys_data), f'Invalid Strategy offset 0x{strat:04X}'
           assert 0x0012 <= intr < len(sys_data), f'Invalid Interrupt offset 0x{intr:04X}'
           assert sig == b'OPENLNK', f'Invalid driver signature {sig!r}'
-          print(f'Verified OPENLNK.SYS: {len(sys_data)} B, attr=0x{attr:04X}, strat=0x{strat:04X}, intr=0x{intr:04X}, sig={sig!r}')
+          print(f'Verified OPENLNK.SYS: disk={len(sys_data)} B (== _sys_bss_start), resident={res_end} B ({res_end/1024:.2f} KiB), attr=0x{attr:04X}, strat=0x{strat:04X}, intr=0x{intr:04X}, sig={sig!r}')
           "
 
       - name: Upload 16-bit DOS build artifacts
@@ -146,6 +164,8 @@ jobs:
             cleanroom/dos/build/OPENSVR.EXE
             cleanroom/dos/build/OPENLNK.EXE
             cleanroom/dos/build/OPENLNK.SYS
+            cleanroom/dos/build/OPENSVR.MAP
+            cleanroom/dos/build/OPENLNKX.MAP
             cleanroom/dos/build/OPENLNK.MAP
 
   kaitai-and-vectors:

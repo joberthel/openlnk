@@ -16,11 +16,11 @@
 
         .8086
 
-DGROUP  GROUP _TEXT, CONST, CONST2, _DATA, _BSS, _BSSEND, _STACK
+DGROUP  GROUP SYS_HEAD, _TEXT, CONST, CONST2, _DATA, _BSS, _BSSEND, _STACK
 
         EXTRN _olnk_dos_sys_interrupt_c:NEAR
 
-_TEXT   SEGMENT BYTE PUBLIC USE16 'CODE'
+SYS_HEAD SEGMENT BYTE PUBLIC USE16 'CODE'
         ASSUME CS:DGROUP, DS:DGROUP, SS:DGROUP
 
 ; ============================================================================
@@ -278,6 +278,9 @@ saved_ss        dw 0
 saved_sp        dw 0
 bss_cleared     db 0
 
+SYS_HEAD ENDS
+
+_TEXT   SEGMENT BYTE PUBLIC USE16 'CODE'
 _TEXT   ENDS
 
 CONST   SEGMENT WORD PUBLIC USE16 'DATA'
@@ -302,7 +305,7 @@ _BSSEND ENDS
 _STACK  SEGMENT PARA PUBLIC USE16 'STACK'
         PUBLIC _sys_stack_top
         PUBLIC _sys_resident_end
-_sys_stack_area db 2048 dup (0)
+_sys_stack_area db 2048 dup (?)
 _sys_stack_top  label byte
 _sys_resident_end label byte
 _STACK  ENDS

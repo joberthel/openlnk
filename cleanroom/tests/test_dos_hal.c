@@ -3,6 +3,7 @@
  * Host-side C99 verification suite for the 16-bit Real-Mode MS-DOS HAL:
  *   - cleanroom/dos/dos_hal_uart.c   (8250/16450/16550A COM1..COM4 + BIOS 18.2 Hz timer)
  *   - cleanroom/dos/dos_hal_disk.c   (MS-DOS INT 25h/26h logical sector storage backend)
+ *   - cleanroom/dos/dos_hal_io.c     (Zero-stdio INT 21h console/file I/O & cmdline parser)
  *   - cleanroom/dos/openlnk_sys_stub.c (OPENLNK.SYS Block Device Driver commands 0x00..0x13)
  *
  * Simulates two real 16550A UART register blocks wired back-to-back with strict
@@ -13,6 +14,7 @@
  * Strictly ISO C99, zero dynamic memory allocation, zero floating-point.
  */
 #include "dos_hal_disk.h"
+#include "dos_hal_io.h"
 #include "dos_hal_uart.h"
 #include "openlnk/server.h"
 #include "openlnk_sys.h"
@@ -1191,12 +1193,168 @@ static void test_openlnk_sys_rh_marshalling_over_16550a(void) {
           "RH INIT online boot banner reports (D:) [connected]");
 }
 
+/* =========================================================================
+ * Test 5: Zero-Stdio DOS I/O HAL (dos_hal_io.c) & PSP Command-Line Parser
+ * ========================================================================= */
+
+typedef struct {
+    char buf[256];
+    size_t len;
+} io_capture_t;
+
+static void io_capture_sink(const char *data, size_t len, void *ctx) {
+    io_capture_t *cap = (io_capture_t *)ctx;
+    size_t i;
+    for (i = 0U; (i < len) && (cap->len + 1U < sizeof(cap->buf)); ++i) {
+        cap->buf[cap->len++] = data[i];
+    }
+    cap->buf[cap->len] = '\0';
+}
+
+static void io_capture_reset(io_capture_t *cap) {
+    cap->len = 0U;
+    cap->buf[0] = '\0';
+}
+
+static void test_dos_hal_io(void) {
+    io_capture_t cap;
+
+    /* 1. Minimal freestanding ASCII helpers */
+    CHECK(olnk_ascii_isalpha('A') && olnk_ascii_isalpha('Z') &&
+              olnk_ascii_isalpha('a') && olnk_ascii_isalpha('z'),
+          "olnk_ascii_isalpha accepts ASCII letters");
+    CHECK(!olnk_ascii_isalpha('0') && !olnk_ascii_isalpha('@') &&
+              !olnk_ascii_isalpha('[') && !olnk_ascii_isalpha('`') &&
+              !olnk_ascii_isalpha('{') && !olnk_ascii_isalpha('\0'),
+          "olnk_ascii_isalpha rejects non-letters");
+    CHECK((olnk_ascii_toupper('a') == 'A') && (olnk_ascii_toupper('z') == 'Z') &&
+              (olnk_ascii_toupper('A') == 'A') && (olnk_ascii_toupper('5') == '5') &&
+              (olnk_ascii_toupper('/') == '/'),
+          "olnk_ascii_toupper uppercases ASCII lowercase only");
+    CHECK(olnk_ascii_ieq_prefix("/baud:115200", "/BAUD:") &&
+              olnk_ascii_ieq_prefix("/CoM2", "/COM") &&
+              !olnk_ascii_ieq_prefix("/CO", "/COM") &&
+              !olnk_ascii_ieq_prefix("/DIR", "/GET"),
+          "olnk_ascii_ieq_prefix matches case-insensitively");
+    CHECK((olnk_ascii_parse_u32("0") == 0UL) &&
+              (olnk_ascii_parse_u32("65535") == 65535UL) &&
+              (olnk_ascii_parse_u32("115200") == 115200UL) &&
+              (olnk_ascii_parse_u32("4294967295") == 4294967295UL) &&
+              (olnk_ascii_parse_u32("9600bps") == 9600UL) &&
+              (olnk_ascii_parse_u32("") == 0UL) &&
+              (olnk_ascii_parse_u32(NULL) == 0UL),
+          "olnk_ascii_parse_u32 parses 0..UINT32_MAX cleanly");
+
+    /* 2. Zero-stdio decimal, hex, and padded console output */
+    io_capture_reset(&cap);
+    olnk_dos_io_set_stdout_sink(io_capture_sink, &cap);
+
+    olnk_dos_put_u32(0UL);
+    CHECK(strcmp(cap.buf, "0") == 0, "olnk_dos_put_u32(0) == \"0\"");
+
+    io_capture_reset(&cap);
+    olnk_dos_put_u32(65535UL);
+    CHECK(strcmp(cap.buf, "65535") == 0, "olnk_dos_put_u32(65535) == \"65535\"");
+
+    io_capture_reset(&cap);
+    olnk_dos_put_u32(4294967295UL);
+    CHECK(strcmp(cap.buf, "4294967295") == 0, "olnk_dos_put_u32(4294967295) == \"4294967295\"");
+
+    io_capture_reset(&cap);
+    olnk_dos_put_hex16(0x0000U);
+    olnk_dos_putc(',');
+    olnk_dos_put_hex16(0x03F8U);
+    olnk_dos_putc(',');
+    olnk_dos_put_hex16(0xFFFFU);
+    CHECK(strcmp(cap.buf, "0000,03F8,FFFF") == 0, "olnk_dos_put_hex16 formats 4 uppercase digits");
+
+    io_capture_reset(&cap);
+    olnk_dos_put_hex32(0x00000000UL);
+    olnk_dos_putc(',');
+    olnk_dos_put_hex32(0x4F4C4331UL);
+    olnk_dos_putc(',');
+    olnk_dos_put_hex32(0xDEADBEEFUL);
+    olnk_dos_putc(',');
+    olnk_dos_put_hex32(0xFFFFFFFFUL);
+    CHECK(strcmp(cap.buf, "00000000,4F4C4331,DEADBEEF,FFFFFFFF") == 0,
+          "olnk_dos_put_hex32 formats 8 uppercase digits");
+
+    io_capture_reset(&cap);
+    olnk_dos_put_str_pad("README.TXT", 14U);
+    olnk_dos_putc('|');
+    olnk_dos_put_str_pad("EXACT", 5U);
+    olnk_dos_putc('|');
+    olnk_dos_put_str_pad("TOOLONG", 4U);
+    CHECK(strcmp(cap.buf, "README.TXT    |EXACT|TOOLONG") == 0,
+          "olnk_dos_put_str_pad right-pads to width without truncating");
+
+    olnk_dos_io_set_stdout_sink(NULL, NULL);
+
+    /* 3. Zero-heap MS-DOS PSP command-line tokenizer */
+    {
+        char cmd1[] = "  /COM1\t/BAUD:115200   C:  \rEXTRA";
+        char *argv1[8];
+        int argc1 = olnk_dos_parse_cmdline(cmd1, argv1, 8);
+        CHECK((argc1 == 4) && (argv1[0][0] == '\0') &&
+                  (strcmp(argv1[1], "/COM1") == 0) &&
+                  (strcmp(argv1[2], "/BAUD:115200") == 0) &&
+                  (strcmp(argv1[3], "C:") == 0) &&
+                  (argv1[4] == NULL),
+              "olnk_dos_parse_cmdline splits whitespace and stops at CR");
+    }
+    {
+        char cmd2[] = " /GET \"MY FILE.TXT\" OUT.BIN\r";
+        char *argv2[8];
+        int argc2 = olnk_dos_parse_cmdline(cmd2, argv2, 8);
+        CHECK((argc2 == 4) && (strcmp(argv2[1], "/GET") == 0) &&
+                  (strcmp(argv2[2], "MY FILE.TXT") == 0) &&
+                  (strcmp(argv2[3], "OUT.BIN") == 0) &&
+                  (argv2[4] == NULL),
+              "olnk_dos_parse_cmdline handles quoted arguments in-place");
+    }
+    {
+        char cmd3[] = "   \r";
+        char *argv3[4];
+        int argc3 = olnk_dos_parse_cmdline(cmd3, argv3, 4);
+        CHECK((argc3 == 1) && (argv3[1] == NULL),
+              "olnk_dos_parse_cmdline handles blank command tail");
+    }
+
+    /* 4. Zero-stdio file create / write / close round-trip */
+    {
+        const char *tmp_path = "openlnk_dos_io_test.tmp";
+        const uint8_t payload[12] = { 'O', 'P', 'E', 'N', 'L', 'N', 'K', '!', 0x00U, 0x0DU, 0x0AU, 0xFFU };
+        uint8_t readback[12];
+        olnk_dos_file_t df;
+        FILE *fp;
+        size_t rd = 0U;
+
+        memset(&df, 0, sizeof(df));
+        memset(readback, 0, sizeof(readback));
+        CHECK(olnk_dos_file_create(&df, tmp_path), "olnk_dos_file_create opens binary output file");
+        CHECK(olnk_dos_file_write(&df, payload, sizeof(payload)) == sizeof(payload),
+              "olnk_dos_file_write writes exact binary byte count");
+        CHECK(olnk_dos_file_close(&df), "olnk_dos_file_close closes handle cleanly");
+
+        fp = fopen(tmp_path, "rb");
+        CHECK(fp != NULL, "readback fopen succeeds");
+        if (fp != NULL) {
+            rd = fread(readback, 1U, sizeof(readback), fp);
+            (void)fclose(fp);
+        }
+        (void)remove(tmp_path);
+        CHECK((rd == sizeof(payload)) && (memcmp(payload, readback, sizeof(payload)) == 0),
+              "olnk_dos_file_create/write/close round-trip matches bit-for-bit");
+    }
+}
+
 int main(void) {
     test_uart_register_programming_and_fifo_detect();
     test_dos_disk_hal_int25_26();
     test_openlnk_sys_over_simulated_16550a_uart();
     test_openlnk_sys_config_parser();
     test_openlnk_sys_rh_marshalling_over_16550a();
+    test_dos_hal_io();
 
     printf("[test_dos_hal] PASSED=%d FAILED=%d\n", g_pass, g_fail);
     return (g_fail == 0) ? 0 : 1;

@@ -101,9 +101,8 @@ typedef struct {
     uint16_t rx_pos;
     uint16_t rx_crc;
 
-    /* Phase C active TX frame state */
+    /* Phase C active TX frame state (half-duplex: TX data payload reuses link.rx_buffer) */
     uint8_t tx_ctrl_buf[256];
-    uint8_t tx_data_buf[OLNK_MAX_PAYLOAD_SIZE];
     const uint8_t *tx_payload_ptr;
     uint16_t tx_payload_len;
     bool tx_more_frags;
