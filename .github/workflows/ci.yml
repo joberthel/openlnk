@@ -106,7 +106,7 @@ jobs:
         if: steps.cache-watcom.outputs.cache-hit != 'true'
         run: |
           sudo mkdir -p /opt/watcom
-          curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/owsnapshot.tar.xz" \
+          curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/ow-snapshot.tar.xz" \
             | sudo tar -xJf - -C /opt/watcom
 
       - name: Cross-compile 16-bit DOS OPENSVR.EXE, OPENLNK.EXE & OPENLNK.SYS driver object

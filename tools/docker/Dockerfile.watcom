@@ -14,7 +14,7 @@ ENV PATH="${WATCOM}/binl64:${PATH}"
 ENV INCLUDE="${WATCOM}/h"
 
 RUN mkdir -p "${WATCOM}" \
-    && curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/owsnapshot.tar.xz" \
+    && curl -fsSL "https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/ow-snapshot.tar.xz" \
     | tar -xJf - -C "${WATCOM}"
 
 WORKDIR /workspace

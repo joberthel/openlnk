@@ -52,6 +52,7 @@ cleanroom/opensvr
 cleanroom/openlnk
 cleanroom/openlnk-vector-check
 cleanroom/test_libopenlnk
+cleanroom/test_dos_hal
 
 # Python artifacts
 __pycache__/

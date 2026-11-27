@@ -33,7 +33,7 @@ All 7 Golden Traces have been 100% deterministically decoded and verified (**774
 | Linux x86_64 Desktop | GCC / Clang (`-std=c99 -Werror -pedantic`) | Zero `malloc`, Zero FP | `CONFIGURED (CI)` | `READY (CI)` |
 | macOS ARM64 Desktop | Apple Clang (`-std=c99 -Werror -pedantic -Wconversion`) | Zero `malloc`, Zero FP | `PASS` | `PASS (CTest, self-test, 24/24 parity, 86Box Live Oracle)` |
 | Windows x64 Desktop | MSVC (`/W4 /WX`) | Zero `malloc`, Zero FP | `CONFIGURED (CI, _WIN32 audited)` | `READY (CI)` |
-| MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we`) | 8086/8088 / NEC V30 (`8250/16550A` + `INT 25h/26h`) | `STRICT C99 PASS (Watcom CI)` | `PASS (83/83 Sim-16550A CTest), 86Box DOS EXE PENDING` |
+| MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we`) | 8086/8088 / NEC V30 (`8250/16550A` + `INT 25h/26h`) | `PASS (0 warnings, MZ 35 KB / 30 KB)` | `PASS (83/83 Sim-16550A CTest), 86Box DOS EXE READY` |
 | ESP32 Embedded | ESP-IDF 5.x / PlatformIO / Arduino | MAX3232 UART + SDMMC | `STRICT C99 PASS (Manifest Ready)` | `PENDING (HW)` |
 
 ## 4. Automated Verification Pipeline Gates
