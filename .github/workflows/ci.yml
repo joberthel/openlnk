@@ -222,7 +222,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: esp-idf-5.3.2-${{ matrix.target }}-${{ hashFiles('esp32/CMakeLists.txt', 'esp32/examples/sd_server_idf/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/Kconfig.projbuild') }}
+          key: esp-idf-5.3.2-${{ matrix.target }}-${{ hashFiles('esp32/CMakeLists.txt', 'esp32/examples/sd_server_idf/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/CMakeLists.txt', 'esp32/examples/sd_server_idf/main/Kconfig.projbuild', 'esp32/examples/dos_client_idf/CMakeLists.txt', 'esp32/examples/dos_client_idf/main/CMakeLists.txt', 'esp32/examples/dos_client_idf/main/Kconfig.projbuild') }}
           restore-keys: |
             esp-idf-5.3.2-${{ matrix.target }}-
 
@@ -246,6 +246,15 @@ jobs:
           ! grep -nE "(/cleanroom/|/esp32/).*warning:" "build_${{ matrix.target }}_img/build.log"
           rm -f sdkconfig.ci_img
 
+      - name: Cross-compile dos_client_idf for ${{ matrix.target }} (Client + /dos FatFs VFS)
+        run: |
+          source /opt/esp/idf/export.sh
+          cd esp32/examples/dos_client_idf
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" set-target "${{ matrix.target }}"
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" build 2>&1 | tee "build_${{ matrix.target }}/build.log"
+          ! grep -nE "(/cleanroom/|/esp32/).*warning:" "build_${{ matrix.target }}/build.log"
+          idf.py -B "build_${{ matrix.target }}" -DSDKCONFIG="sdkconfig.${{ matrix.target }}" size
+
       - name: Show ccache statistics
         run: ccache -s
 
@@ -256,3 +265,5 @@ jobs:
           path: |
             esp32/examples/sd_server_idf/build_${{ matrix.target }}/openlnk_sd_server.bin
             esp32/examples/sd_server_idf/build_${{ matrix.target }}/openlnk_sd_server.elf
+            esp32/examples/dos_client_idf/build_${{ matrix.target }}/openlnk_dos_client.bin
+            esp32/examples/dos_client_idf/build_${{ matrix.target }}/openlnk_dos_client.elf

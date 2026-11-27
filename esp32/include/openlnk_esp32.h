@@ -1,6 +1,7 @@
 /* esp32/include/openlnk_esp32.h
  *
- * Production-ready ESP32 HAL & Server Engine for OpenLNK (libopenlnk).
+ * Production-ready ESP32 HAL, Server Engine, Client Wrapper & FatFs VFS Mount
+ * Bridge for OpenLNK (libopenlnk).
  *
  * Provides:
  *   1. Multi-instance RS-232 / MAX3232 UART transport HAL (1200..115200 bps, 8N1)
@@ -11,10 +12,17 @@
  *   3. Disk Image File Storage HAL (.img / Fixed-Size .vhd over POSIX VFS stdio).
  *   4. Caller-owned High-Level Server Engine & optional FreeRTOS task runner
  *      using monotonic esp_timer_get_time() elapsed timing.
+ *   5. Caller-owned Thread-Safe High-Level Client Wrapper around olnk_client_t
+ *      with static FreeRTOS mutex, auto-reconnect / session resumption, raw sector
+ *      streaming backup helper, and idle background keepalive task.
+ *   6. FatFs DiskIO & ESP-IDF POSIX VFS Mount Bridge (e.g. "/dos") so remote
+ *      MS-DOS INTERSVR.EXE / OPENSVR.EXE / opensvr drives can be accessed via
+ *      standard fopen/fread/fwrite/opendir/mkdir/unlink.
  *
  * Strictly ISO C99, zero dynamic allocation (malloc/free), zero floating-point.
- * IMPORTANT: olnk_esp32_server_t embeds olnk_server_t (~9.2 KiB); ALWAYS allocate
- * statically or in caller-owned global/BSS storage — never on a FreeRTOS task stack.
+ * IMPORTANT: olnk_esp32_server_t (~9.3 KiB) and olnk_esp32_client_t (~8.9 KiB)
+ * embed large static frame buffers; ALWAYS allocate statically or in caller-owned
+ * global/BSS storage — never on a FreeRTOS task stack.
  */
 #ifndef OPENLNK_ESP32_H
 #define OPENLNK_ESP32_H
@@ -31,6 +39,7 @@
 
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
 #endif
@@ -520,6 +529,369 @@ olnk_status_t olnk_esp32_server_stop(
     olnk_esp32_server_t *esrv,
     uint32_t wait_timeout_ms
 );
+
+/* =========================================================================
+ * 5. High-Level Thread-Safe ESP32 Client Wrapper & Keepalive Task
+ * ========================================================================= */
+
+#define OLNK_ESP32_CLIENT_DEFAULT_SYNC_RETRIES     15U
+#define OLNK_ESP32_CLIENT_DEFAULT_MAX_DRIVES       8U
+#define OLNK_ESP32_CLIENT_DEFAULT_FIRST_DRIVE      3U   /* D: */
+#define OLNK_ESP32_CLIENT_DEFAULT_KEEPALIVE_MS     200U
+#define OLNK_ESP32_CLIENT_DEFAULT_TASK_STACK_BYTES 3072U
+#define OLNK_ESP32_CLIENT_DEFAULT_TASK_PRIORITY    4U
+
+typedef bool (*olnk_esp32_lock_fn_t)(void *ctx);
+typedef void (*olnk_esp32_unlock_fn_t)(void *ctx);
+
+/**
+ * Streaming sink callback for olnk_esp32_client_dump_sectors().
+ * Return true to continue streaming, false to abort cleanly.
+ */
+typedef bool (*olnk_esp32_dump_write_fn_t)(
+    uint32_t lba,
+    const uint8_t *data,
+    uint32_t byte_len,
+    void *ctx
+);
+
+typedef struct {
+    uint8_t max_baud_idx;           /* OLNK_BAUD_1200..OLNK_BAUD_115200 (default 7) */
+    bool local_requires_echo;       /* Default true (safe for 3-wire MAX3232) */
+    bool force_tx_echo;             /* Default false; sets cli.link.peer_echo_forced after connect */
+    uint16_t sync_retries;          /* Default 15 */
+    uint32_t rpc_timeout_ms;        /* Default OLNK_CLIENT_DEFAULT_RESP_MS (5000 ms) */
+    uint8_t max_client_drives;      /* Default 8 */
+    uint8_t first_client_drive;     /* Default 3 (D:) */
+    bool auto_reconnect;            /* Default true: transparently reconnect & retry RPC once */
+    uint32_t keepalive_interval_ms; /* Default 200 ms (0 disables background keepalive) */
+    /* Optional injectable mutex callbacks (NULL -> static FreeRTOS mutex on ESP-IDF). */
+    olnk_esp32_lock_fn_t lock;
+    olnk_esp32_unlock_fn_t unlock;
+    void *lock_ctx;
+    /* Optional monotonic ms clock override (NULL -> esp_timer_get_time()/1000 on ESP-IDF). */
+    olnk_esp32_time_ms_fn_t get_time_ms;
+    void *time_ctx;
+} olnk_esp32_client_cfg_t;
+
+typedef struct {
+    olnk_client_t client; /* ~8.7 KiB: MUST be static / caller-owned BSS, NEVER on task stack! */
+    olnk_esp32_client_cfg_t cfg;
+    olnk_session_sync_resp_t last_sync;
+    bool has_sync;
+    bool initialized;
+
+    /* Last RPC/keepalive monotonic timestamp for idle keepalive scheduling */
+    uint64_t last_activity_ms;
+    bool has_last_activity;
+
+    /* Telemetry counters */
+    uint32_t reconnect_count;
+    uint32_t keepalive_fail_count;
+
+    /* Mutex & background keepalive task state */
+    olnk_esp32_lock_fn_t lock_fn;
+    olnk_esp32_unlock_fn_t unlock_fn;
+    void *lock_ctx;
+#ifdef ESP_PLATFORM
+    StaticSemaphore_t mutex_storage;
+    SemaphoreHandle_t mutex_handle;
+    TaskHandle_t keepalive_task_handle;
+#else
+    void *mutex_handle;
+    void *keepalive_task_handle;
+#endif
+    volatile bool keepalive_stop_requested;
+    volatile bool keepalive_running;
+} olnk_esp32_client_t;
+
+/**
+ * Populate cfg with recommended ESP32 client defaults (115200 bps max,
+ * echo-paced RX enabled, auto-reconnect enabled, 200 ms keepalive interval).
+ */
+void olnk_esp32_client_cfg_default(olnk_esp32_client_cfg_t *cfg);
+
+/**
+ * Initialize a caller-owned thread-safe ESP32 client wrapper around olnk_client_t.
+ * Creates a static FreeRTOS mutex (zero malloc) on ESP-IDF when cfg->lock == NULL.
+ */
+olnk_status_t olnk_esp32_client_init(
+    olnk_esp32_client_t *ecli,
+    olnk_transport_t transport,
+    const olnk_esp32_client_cfg_t *cfg
+);
+
+/**
+ * Stop any background keepalive task, disconnect the link cleanly, and release
+ * client state.
+ */
+olnk_status_t olnk_esp32_client_deinit(olnk_esp32_client_t *ecli);
+
+/**
+ * Execute Phase A/B connect -> 0x00 SESSION_SYNC -> 0x01 MAP_CONFIG (if fresh
+ * session or no cached map), preserving client_id/server_id for resumption.
+ */
+olnk_status_t olnk_esp32_client_connect_session(olnk_esp32_client_t *ecli);
+
+/**
+ * Drop the active link back to 9600 bps (preserving session IDs).
+ */
+olnk_status_t olnk_esp32_client_disconnect(olnk_esp32_client_t *ecli);
+
+/**
+ * Select the first mapped & ready remote server unit (mirrors desktop
+ * select_default_unit). Falls back to first mapped unit if none return a BPB.
+ */
+olnk_status_t olnk_esp32_client_select_default_unit(
+    olnk_esp32_client_t *ecli,
+    uint8_t *out_unit
+);
+
+/**
+ * Return true if the server advertised OLNK_MAP_READONLY_BIT (0x80) for unit
+ * in the cached MAP_CONFIG drive_map_resp table.
+ */
+bool olnk_esp32_client_unit_is_readonly(olnk_esp32_client_t *ecli, uint8_t unit);
+
+/**
+ * Thread-safe getter for negotiated max_block_size (clamped to sector..8192 B).
+ */
+uint16_t olnk_esp32_client_max_block_size(olnk_esp32_client_t *ecli);
+
+/* Thread-safe RPC wrappers (with optional auto-reconnect retry on link drop) */
+olnk_status_t olnk_esp32_client_get_drive_info(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    olnk_get_drive_info_resp_t *out_resp
+);
+
+olnk_status_t olnk_esp32_client_media_check(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint8_t media_descriptor,
+    olnk_media_check_resp_t *out_resp
+);
+
+olnk_status_t olnk_esp32_client_build_bpb(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint8_t media_descriptor,
+    olnk_build_bpb_resp_t *out_resp
+);
+
+olnk_status_t olnk_esp32_client_read_sectors(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint8_t media_descriptor,
+    uint32_t start_lba,
+    uint16_t sector_count,
+    uint16_t bytes_per_sector,
+    uint8_t *out_buf,
+    uint32_t out_cap,
+    olnk_sector_io_resp_t *out_resp
+);
+
+olnk_status_t olnk_esp32_client_write_sectors(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint8_t media_descriptor,
+    uint32_t start_lba,
+    uint16_t sector_count,
+    uint16_t bytes_per_sector,
+    const uint8_t *in_buf,
+    bool verify,
+    olnk_sector_io_resp_t *out_resp
+);
+
+olnk_status_t olnk_esp32_client_get_media_id(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint16_t *out_status,
+    olnk_generic_ioctl_mid_t *out_mid
+);
+
+olnk_status_t olnk_esp32_client_set_media_id(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    const olnk_generic_ioctl_mid_t *mid,
+    uint16_t *out_status
+);
+
+olnk_status_t olnk_esp32_client_keepalive(olnk_esp32_client_t *ecli);
+
+/**
+ * Single idle-aware keepalive check: sends a keepalive only if at least
+ * cfg.keepalive_interval_ms have elapsed since the last RPC/keepalive.
+ * Invoked periodically by the background keepalive task and testable on host.
+ */
+olnk_status_t olnk_esp32_client_keepalive_step(olnk_esp32_client_t *ecli);
+
+/**
+ * Stream remote sectors in <= max_block_size chunks (reusing internal static
+ * frame storage, zero malloc) to write_cb (e.g. SD card .img backup or HTTP).
+ * Pass sector_count == 0 to dump from start_lba to the end of the volume.
+ */
+olnk_status_t olnk_esp32_client_dump_sectors(
+    olnk_esp32_client_t *ecli,
+    uint8_t unit,
+    uint32_t start_lba,
+    uint32_t sector_count,
+    olnk_esp32_dump_write_fn_t write_cb,
+    void *write_ctx,
+    uint32_t *out_sectors_dumped
+);
+
+/**
+ * Start a lightweight background FreeRTOS keepalive task that periodically
+ * calls olnk_esp32_client_keepalive_step() so INTERSVR.EXE / opensvr stays
+ * alive during idle periods without starving active VFS I/O.
+ * Pass core_id < 0 for tskNO_AFFINITY. Returns OLNK_ERR_PROTOCOL on host builds.
+ */
+olnk_status_t olnk_esp32_client_start_keepalive_task(
+    olnk_esp32_client_t *ecli,
+    const char *task_name,
+    uint32_t stack_bytes,
+    uint32_t priority,
+    int core_id
+);
+
+/**
+ * Request the background keepalive task to stop and optionally wait up to
+ * wait_timeout_ms for clean termination.
+ */
+olnk_status_t olnk_esp32_client_stop_keepalive_task(
+    olnk_esp32_client_t *ecli,
+    uint32_t wait_timeout_ms
+);
+
+/* =========================================================================
+ * 6. FatFs DiskIO Core & ESP-IDF POSIX VFS Mount Bridge (e.g. "/dos")
+ * ========================================================================= */
+
+#define OLNK_ESP32_VFS_MAX_PATH_LEN      32U
+#define OLNK_ESP32_VFS_DEFAULT_MAX_FILES 4U
+#define OLNK_ESP32_VFS_PDRV_NONE         0xFFU
+#define OLNK_ESP32_UNIT_AUTO             0xFFU
+
+/* Platform-independent FatFs-compatible status flags (match ChaN FatFs STA_*) */
+#define OLNK_ESP32_DISK_STA_OK           0x00U
+#define OLNK_ESP32_DISK_STA_NOINIT       0x01U
+#define OLNK_ESP32_DISK_STA_NODISK       0x02U
+#define OLNK_ESP32_DISK_STA_PROTECT      0x04U
+
+/* Platform-independent FatFs-compatible result codes (match ChaN FatFs DRESULT) */
+typedef enum {
+    OLNK_ESP32_DISK_RES_OK     = 0U,
+    OLNK_ESP32_DISK_RES_ERROR  = 1U,
+    OLNK_ESP32_DISK_RES_WRPRT  = 2U,
+    OLNK_ESP32_DISK_RES_NOTRDY = 3U,
+    OLNK_ESP32_DISK_RES_PARERR = 4U
+} olnk_esp32_disk_res_t;
+
+/* Platform-independent FatFs-compatible ioctl commands (match ChaN FatFs) */
+#define OLNK_ESP32_DISK_CTRL_SYNC        0U
+#define OLNK_ESP32_DISK_GET_SECTOR_COUNT 1U
+#define OLNK_ESP32_DISK_GET_SECTOR_SIZE  2U
+#define OLNK_ESP32_DISK_GET_BLOCK_SIZE   3U
+
+typedef struct {
+    const char *base_path; /* VFS mount prefix, e.g. "/dos" (NULL -> "/dos") */
+    uint8_t unit;          /* Remote server unit (0=A:, 2=C:, ...), or OLNK_ESP32_UNIT_AUTO */
+    bool read_only;        /* Force software read-only mount (default false) */
+    bool write_verify;     /* Use opcode 0x06 WRITE_VERIFY for writes (default false) */
+    uint8_t max_files;     /* Max simultaneously open POSIX files (0 -> 4) */
+} olnk_esp32_vfs_cfg_t;
+
+typedef struct {
+    olnk_esp32_client_t *client;
+    uint8_t unit;
+    bool cfg_read_only;
+    bool read_only;        /* Effective RO: cfg_read_only || server OLNK_MAP_READONLY_BIT */
+    bool write_verify;
+    uint8_t max_files;
+    bool disk_ready;
+    bool vfs_mounted;
+
+    /* Cached partition-relative BPB geometry from MEDIA_CHECK + BUILD_BPB */
+    uint16_t bytes_per_sector;
+    uint8_t sectors_per_cluster;
+    uint8_t media_descriptor;
+    uint32_t total_sectors;
+    olnk_dos_bpb_t bpb;
+
+    /* ESP-IDF FatFs / VFS binding metadata */
+    uint8_t pdrv;
+    char base_path[OLNK_ESP32_VFS_MAX_PATH_LEN];
+    char fat_drv_str[4];   /* e.g. "0:" or "1:" */
+    void *fatfs;           /* Internally FATFS * returned by esp_vfs_fat_register* */
+
+    /* Telemetry counters */
+    uint32_t disk_reads;
+    uint32_t disk_writes;
+    uint32_t disk_errors;
+} olnk_esp32_vfs_mount_t;
+
+/**
+ * Populate cfg with safe defaults ("/dos", specified unit or OLNK_ESP32_UNIT_AUTO,
+ * read_only=false, write_verify=false, max_files=4).
+ */
+void olnk_esp32_vfs_cfg_default(
+    olnk_esp32_vfs_cfg_t *cfg,
+    const char *base_path,
+    uint8_t unit
+);
+
+/**
+ * Attach a caller-owned olnk_esp32_vfs_mount_t to a client and config without
+ * registering ESP-IDF VFS yet (for direct DiskIO host testing or custom setups).
+ */
+olnk_status_t olnk_esp32_vfs_disk_attach(
+    olnk_esp32_vfs_mount_t *mnt,
+    olnk_esp32_client_t *client,
+    const olnk_esp32_vfs_cfg_t *cfg
+);
+
+/**
+ * Platform-independent FatFs DiskIO core entrypoints (called by ESP-IDF
+ * ff_diskio_impl_t glue and directly by host CTest unit tests).
+ */
+uint8_t olnk_esp32_vfs_disk_init(olnk_esp32_vfs_mount_t *mnt);
+uint8_t olnk_esp32_vfs_disk_status(const olnk_esp32_vfs_mount_t *mnt);
+olnk_esp32_disk_res_t olnk_esp32_vfs_disk_read(
+    olnk_esp32_vfs_mount_t *mnt,
+    uint8_t *buff,
+    uint32_t sector,
+    uint32_t count
+);
+olnk_esp32_disk_res_t olnk_esp32_vfs_disk_write(
+    olnk_esp32_vfs_mount_t *mnt,
+    const uint8_t *buff,
+    uint32_t sector,
+    uint32_t count
+);
+olnk_esp32_disk_res_t olnk_esp32_vfs_disk_ioctl(
+    olnk_esp32_vfs_mount_t *mnt,
+    uint8_t cmd,
+    void *buff
+);
+
+/**
+ * Mount a remote MS-DOS drive at cfg->base_path (e.g. "/dos") via ESP-IDF
+ * FatFs DiskIO + esp_vfs_fat_register_cfg() + f_mount(). Dynamically allocates
+ * a free FatFs pdrv so "/sdcard" and "/dos" can coexist simultaneously.
+ * On non-ESP host builds, returns OLNK_ERR_PROTOCOL.
+ */
+olnk_status_t olnk_esp32_vfs_mount(
+    olnk_esp32_vfs_mount_t *mnt,
+    olnk_esp32_client_t *client,
+    const olnk_esp32_vfs_cfg_t *cfg
+);
+
+/**
+ * Unmount a mounted remote drive cleanly (f_mount(NULL), VFS unregister,
+ * ff_diskio_unregister) and reset mount state.
+ */
+olnk_status_t olnk_esp32_vfs_unmount(olnk_esp32_vfs_mount_t *mnt);
 
 #ifdef __cplusplus
 }

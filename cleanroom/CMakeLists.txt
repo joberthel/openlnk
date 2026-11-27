@@ -87,6 +87,8 @@ if(OPENLNK_BUILD_TESTS)
         ../esp32/src/esp32_hal_sd.c
         ../esp32/src/esp32_hal_img.c
         ../esp32/src/esp32_server.c
+        ../esp32/src/esp32_client.c
+        ../esp32/src/esp32_client_vfs.c
     )
     target_include_directories(test_esp32_hal PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../esp32/include)
     target_link_libraries(test_esp32_hal PRIVATE openlnk_static)

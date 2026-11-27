@@ -32,7 +32,7 @@ test_libopenlnk: tests/test_libopenlnk.c libopenlnk.a
 test_dos_hal: tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/dos_hal_io.c dos/openlnk_sys_stub.c libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) -Idos tests/test_dos_hal.c dos/dos_hal_uart.c dos/dos_hal_disk.c dos/dos_hal_io.c dos/openlnk_sys_stub.c libopenlnk.a -o $@
 
-ESP32_HAL_SRCS := ../esp32/src/esp32_hal_uart.c ../esp32/src/esp32_hal_sd.c ../esp32/src/esp32_hal_img.c ../esp32/src/esp32_server.c
+ESP32_HAL_SRCS := ../esp32/src/esp32_hal_uart.c ../esp32/src/esp32_hal_sd.c ../esp32/src/esp32_hal_img.c ../esp32/src/esp32_server.c ../esp32/src/esp32_client.c ../esp32/src/esp32_client_vfs.c
 
 test_esp32_hal: tests/test_esp32_hal.c $(ESP32_HAL_SRCS) ../esp32/include/openlnk_esp32.h libopenlnk.a
 	$(CC) $(CFLAGS) $(INCLUDES) -I../esp32/include tests/test_esp32_hal.c $(ESP32_HAL_SRCS) libopenlnk.a -o $@

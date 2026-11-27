@@ -1,0 +1,136 @@
+menu "OpenLNK MS-DOS Client Configuration"
+
+    menu "RS-232 / MAX3232 UART Settings"
+        config OPENLNK_CLIENT_UART_PORT
+            int "UART port number"
+            range 0 2
+            default 1
+            help
+                Hardware UART peripheral wired to the MAX3232 RS-232 transceiver.
+                Keep UART0 free for USB console logging.
+
+        config OPENLNK_CLIENT_UART_TX_GPIO
+            int "UART TX GPIO (to MAX3232 T1IN)"
+            range 0 48
+            default 17 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32S3
+            default 4
+            help
+                GPIO connected to MAX3232 T1IN (3.3V TTL TX).
+
+        config OPENLNK_CLIENT_UART_RX_GPIO
+            int "UART RX GPIO (from MAX3232 R1OUT)"
+            range 0 48
+            default 16 if IDF_TARGET_ESP32
+            default 18 if IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32S3
+            default 5
+            help
+                GPIO connected to MAX3232 R1OUT (3.3V TTL RX).
+
+        config OPENLNK_CLIENT_UART_HW_FLOW_CTRL
+            bool "Enable RTS/CTS hardware flow control"
+            default n
+            help
+                Standard MS-DOS INTERLNK uses 3-wire null-modem cabling (TX/RX/GND)
+                with in-band echo pacing. Leave disabled unless your MAX3232 and
+                PC serial cable wire RTS/CTS.
+
+        config OPENLNK_CLIENT_UART_RTS_GPIO
+            int "UART RTS GPIO"
+            depends on OPENLNK_CLIENT_UART_HW_FLOW_CTRL
+            range -1 48
+            default -1
+
+        config OPENLNK_CLIENT_UART_CTS_GPIO
+            int "UART CTS GPIO"
+            depends on OPENLNK_CLIENT_UART_HW_FLOW_CTRL
+            range -1 48
+            default -1
+
+        choice OPENLNK_CLIENT_MAX_BAUD_CHOICE
+            prompt "Maximum negotiated baud rate"
+            default OPENLNK_CLIENT_MAX_BAUD_115200
+            help
+                Initial sync always runs at 9600 bps and steps up to this ceiling.
+
+            config OPENLNK_CLIENT_MAX_BAUD_9600
+                bool "9600 bps"
+            config OPENLNK_CLIENT_MAX_BAUD_19200
+                bool "19200 bps"
+            config OPENLNK_CLIENT_MAX_BAUD_38400
+                bool "38400 bps"
+            config OPENLNK_CLIENT_MAX_BAUD_57600
+                bool "57600 bps"
+            config OPENLNK_CLIENT_MAX_BAUD_115200
+                bool "115200 bps"
+        endchoice
+
+        config OPENLNK_CLIENT_ECHO_PACED_RX
+            bool "Require byte-by-byte echo pacing on RX (recommended)"
+            default y
+            help
+                Sets local_requires_echo = true so 3-wire RS-232 links remain
+                reliable at up to 115200 bps without hardware flow control.
+
+        config OPENLNK_CLIENT_FORCE_TX_ECHO
+            bool "Force TX echo pacing (for vintage 8250/XT INTERSVR without /V)"
+            default n
+            help
+                Sets cli.link.peer_echo_forced = true immediately after connect.
+                Enable when talking to 8250/XT MS-DOS INTERSVR.EXE instances that
+                drop burst frames without /V.
+
+        config OPENLNK_CLIENT_KEEPALIVE_MS
+            int "Background keepalive interval (ms, 0 = disabled)"
+            range 0 5000
+            default 200
+            help
+                Sends idle keepalive pings only when no VFS RPC has occurred for
+                this many milliseconds, keeping INTERSVR.EXE / opensvr alive.
+    endmenu
+
+    menu "Remote MS-DOS Drive & VFS Mount (/dos)"
+        config OPENLNK_CLIENT_MOUNT_POINT
+            string "POSIX VFS mount path"
+            default "/dos"
+            help
+                Mount point exposed via ESP-IDF FatFs VFS (must start with '/').
+
+        config OPENLNK_CLIENT_REMOTE_UNIT
+            int "Remote server drive unit (-1 = auto-select, 0=A:, 2=C:, ...)"
+            range -1 25
+            default -1
+            help
+                Leave at -1 to automatically mount the first mapped and ready
+                remote drive advertised by INTERSVR.EXE / OPENSVR.EXE / opensvr.
+
+        config OPENLNK_CLIENT_READ_ONLY
+            bool "Mount remote MS-DOS drive read-only (recommended default)"
+            default y
+            help
+                Protects the vintage PC hard disk from accidental writes by
+                returning STA_PROTECT / RES_WRPRT before any write RPC is sent.
+
+        config OPENLNK_CLIENT_WRITE_VERIFY
+            bool "Use opcode 0x06 WRITE_VERIFY on writes"
+            depends on !OPENLNK_CLIENT_READ_ONLY
+            default n
+            help
+                Requests server-side read-back verification on every sector write.
+
+        config OPENLNK_CLIENT_SAMPLE_FILE
+            string "Optional file to read from mounted drive (empty = skip)"
+            default "AUTOEXEC.BAT"
+            help
+                File relative to the mount point to read via standard POSIX
+                fopen()/fread() as a live smoke test (e.g. AUTOEXEC.BAT or CONFIG.SYS).
+
+        config OPENLNK_CLIENT_UNMOUNT_ON_DONE
+            bool "Unmount /dos and disconnect cleanly after demo listing"
+            default n
+            help
+                When enabled, cleanly unmounts the remote VFS and stops the
+                keepalive task after listing /dos and reading the sample file.
+                When disabled, stays mounted with background keepalive running.
+    endmenu
+
+endmenu

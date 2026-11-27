@@ -44,6 +44,8 @@ ESP32_C_FILES = (
     "esp32_hal_sd.c",
     "esp32_hal_img.c",
     "esp32_server.c",
+    "esp32_client.c",
+    "esp32_client_vfs.c",
 )
 
 

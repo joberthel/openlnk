@@ -10,11 +10,14 @@ idf_component_register(
         "src/esp32_hal_sd.c"
         "src/esp32_hal_img.c"
         "src/esp32_server.c"
+        "src/esp32_client.c"
+        "src/esp32_client_vfs.c"
     INCLUDE_DIRS
         "../cleanroom/include"
         "include"
     REQUIRES
         driver
         sdmmc
+        fatfs
         esp_timer
 )

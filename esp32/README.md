@@ -1,23 +1,34 @@
 # OpenLNK for ESP32 (`esp32/`)
 
-Production-ready, zero-allocation ISO C99 HAL and server engine for turning an **ESP32 / ESP32-S2 / ESP32-S3 / ESP32-C3 / ESP32-C6** into a solid-state MS-DOS 5.0 / 6.22 `INTERSVR`-compatible serial block server.
+Production-ready, zero-allocation ISO C99 HAL, Server Engine, Thread-Safe Client Wrapper, and FatFs VFS Mount Bridge (`/dos`) for **ESP32 / ESP32-S2 / ESP32-S3 / ESP32-C3 / ESP32-C6**.
 
-Connect an ESP32 + microSD card + **3.3V MAX3232** RS-232 transceiver directly to a vintage IBM PC/XT/AT/386/486 `COM1:` port and mount FAT12/FAT16 partitions or `.img`/`.vhd` disk images inside MS-DOS using standard `INTERLNK.EXE` or clean-room `OPENLNK.SYS`.
+Connect an ESP32 + **3.3V MAX3232** RS-232 transceiver directly to a vintage IBM PC/XT/AT/386/486 `COM1:` port in **either direction**:
+- **Server Mode (`esp32_server.c`):** Turn an ESP32 + microSD card into a solid-state MS-DOS 5.0 / 6.22 `INTERSVR`-compatible serial block server (`INTERLNK.EXE` / `OPENLNK.SYS` on the PC).
+- **Client Mode + `/dos` VFS Mount (`esp32_client.c`, `esp32_client_vfs.c`):** Connect to a vintage PC running `INTERSVR.EXE`, `OPENSVR.EXE`, or desktop `opensvr` and mount its remote FAT12/FAT16 hard drive directly as a standard ESP-IDF POSIX filesystem (`/dos`) via `fopen`/`fread`/`fwrite`/`opendir`/`mkdir`/`unlink`, or stream raw sector backups directly to an SD card or HTTP sink.
 
 ---
 
 ## Features
 
-- **Zero Dynamic Allocation & Zero Floating-Point:** Core HALs (`esp32_hal_uart.c`, `esp32_hal_sd.c`, `esp32_server.c`) and `libopenlnk` never call `malloc`/`free` and never use `float`/`double`.
+- **Zero Dynamic Allocation & Zero Floating-Point:** Core HALs (`esp32_hal_uart.c`, `esp32_hal_sd.c`, `esp32_server.c`, `esp32_client.c`, `esp32_client_vfs.c`) and `libopenlnk` never call `malloc`/`free` and never use `float`/`double`. Locking uses FreeRTOS static mutexes (`StaticSemaphore_t` + `xSemaphoreCreateMutexStatic`).
 - **Hardened Multi-Instance UART HAL:**
   - Supports 1200–115200 bps (`8N1`) with automatic Phase-B stepwise baud negotiation.
   - Strictly drains pending TX bytes (`uart_wait_tx_done`) before every baud switch.
   - Sub-tick timeout rounding (`timeout_ms > 0` always yields `>= 1` FreeRTOS tick, even at 100 Hz).
   - 1-byte RX FIFO threshold + 1-byte wakeup with opportunistic burst drain for full-speed Echo-Paced and Burst frames.
-- **Two Storage Backends:**
+- **Two Server Storage Backends:**
   1. **Raw SD Card Block Mode (`esp32_hal_sd.c`):** Direct 512-byte sector access via **SDMMC (1-bit / 4-bit)** or **SDSPI**, auto-detecting superfloppy FAT12/FAT16 VBRs vs. MBR partitions (or attaching explicit MBR partitions `0..3`), `WRITE_VERIFY` read-back check, hot-swap `MEDIA_CHANGED` (`0xFF`), card-detect/write-protect GPIOs, and Generic IOCTL `08h/46h` Set Media ID.
   2. **Disk Image File Mode (`esp32_hal_img.c`):** Serves raw FAT12/FAT16 `.img` or Fixed-Size `.vhd` (`conectix` footer stripped automatically) files stored on a normal FAT32/exFAT SD card mounted via ESP-IDF VFS (`/sdcard/dos_c.vhd`). Cleanly separated so raw-block firmware pays zero VFS/FATFS cost.
 - **Monotonic High-Level Server & FreeRTOS Task Runner (`esp32_server.c`):** Uses `esp_timer_get_time()` for accurate protocol timers regardless of early UART returns or tick quantization.
+- **Thread-Safe High-Level Client Wrapper (`esp32_client.c`):**
+  - Static FreeRTOS mutex protecting all RPCs across concurrent tasks.
+  - Transparent `auto_reconnect` with session resumption (`client_id`/`server_id` preserved; skips redundant `MAP_CONFIG` when `session_resumed == true`).
+  - Idle-aware background keepalive task (`olnk_esp32_client_start_keepalive_task`) that only pings when idle `>= keepalive_interval_ms` so active VFS I/O is never starved.
+  - Zero-alloc raw drive streaming backup helper (`olnk_esp32_client_dump_sectors`) reusing internal static frame storage in `<= max_block_size` chunks.
+- **FatFs DiskIO & ESP-IDF POSIX VFS Mount Bridge (`esp32_client_vfs.c`):**
+  - Dynamically allocates a free FatFs `pdrv` via `ff_diskio_get_drive()` so `/sdcard` and `/dos` coexist simultaneously.
+  - Enforces both local `cfg.read_only` and server-advertised `OLNK_MAP_READONLY_BIT` (`STA_PROTECT` / `RES_WRPRT` without sending write RPCs).
+  - Uses `esp_vfs_fat_register_cfg()` on ESP-IDF `>= 5.3.0` (0 deprecation warnings) with clean rollback on mount failure and clean unmount via `olnk_esp32_vfs_unmount()`.
 
 ---
 
@@ -65,17 +76,22 @@ All large contexts MUST be placed in `static` / global BSS storage — **never**
 | Structure | Approximate Size | Allocation Rule |
 | :--- | :---: | :--- |
 | `olnk_esp32_server_t` (embeds `olnk_server_t` + 8197 B frame buffer) | ~9.3 KiB | **Static / caller-owned BSS** |
+| `olnk_esp32_client_t` (embeds `olnk_client_t` + 8197 B frame buffer + static mutex) | ~8.8 KiB | **Static / caller-owned BSS** |
+| `olnk_esp32_vfs_mount_t` (FatFs DiskIO geometry & VFS state) | ~0.15 KiB | Static / caller-owned |
 | `olnk_esp32_sd_drive_t` (embeds `sdmmc_card_t` + 512 B scratch) | ~0.9 KiB | Static / caller-owned |
 | `olnk_esp32_img_drive_t` (embeds 512 B scratch) | ~0.6 KiB | Static / caller-owned |
 | `olnk_esp32_uart_t` | ~0.1 KiB | Static / caller-owned |
 | UART RX + TX ring buffers (IDF driver) | 4096 B + 1024 B | Configured via `olnk_esp32_uart_cfg_t` |
 | Server FreeRTOS task stack (`olnk_esp32_server_start_task`) | `4096 B` default | Only call frames + SD/UART driver calls |
+| Client keepalive task stack (`olnk_esp32_client_start_keepalive_task`) | `3072 B` default | Only idle timer checks + keepalive ping |
 
 ---
 
 ## Quickstart
 
 ### Option A — ESP-IDF 5.x (Recommended)
+
+**Server mode (ESP32 exposes microSD / `.vhd` to MS-DOS `INTERLNK.EXE` / `OPENLNK.SYS`):**
 
 ```bash
 cd esp32/examples/sd_server_idf
@@ -89,6 +105,47 @@ idf.py build flash monitor
 idf.py set-target esp32c3
 idf.py build flash monitor
 ```
+
+**Client mode & `/dos` FatFs VFS mount (ESP32 mounts a remote PC running `INTERSVR.EXE` / `OPENSVR.EXE` / `opensvr`):**
+
+```bash
+cd esp32/examples/dos_client_idf
+
+idf.py set-target esp32   # or esp32c3 / esp32s3
+idf.py menuconfig         # OpenLNK MS-DOS Client Configuration (RO by default)
+idf.py build flash monitor
+```
+
+Minimal API sketch for mounting a remote MS-DOS drive at `/dos` in your own firmware:
+
+```c
+static olnk_esp32_uart_t      g_uart;
+static olnk_esp32_client_t    g_client;   /* ~8.8 KiB — MUST be static BSS! */
+static olnk_esp32_vfs_mount_t g_dos_vfs;
+
+olnk_esp32_uart_cfg_t ucfg;
+olnk_transport_t tr;
+olnk_esp32_uart_cfg_default(&ucfg, 1, 17, 16);
+olnk_esp32_uart_init(&g_uart, &ucfg, NULL, &tr);
+
+olnk_esp32_client_cfg_t ccfg;
+olnk_esp32_client_cfg_default(&ccfg);
+olnk_esp32_client_init(&g_client, tr, &ccfg);
+olnk_esp32_client_connect_session(&g_client);
+olnk_esp32_client_start_keepalive_task(&g_client, "openlnk_ka", 3072, 4, -1);
+
+olnk_esp32_vfs_cfg_t vcfg;
+olnk_esp32_vfs_cfg_default(&vcfg, "/dos", OLNK_ESP32_UNIT_AUTO);
+vcfg.read_only = true; /* Set false for read-write POSIX access */
+if (olnk_esp32_vfs_mount(&g_dos_vfs, &g_client, &vcfg) == OLNK_OK) {
+    FILE *fp = fopen("/dos/AUTOEXEC.BAT", "rb");
+    /* ... fread / opendir / stat / fwrite ... */
+    if (fp) fclose(fp);
+    olnk_esp32_vfs_unmount(&g_dos_vfs);
+}
+```
+
+> **Single-Board Hardware Loopback Tip (ESP32 / ESP32-S3):** Because `olnk_esp32_uart_t` is multi-instance and `/sdcard` + `/dos` allocate distinct FatFs `pdrv` slots dynamically, you can test the entire stack on a single dual-UART ESP32 board without a vintage PC by wiring two jumper wires between **UART1 TX→UART2 RX** and **UART2 TX→UART1 RX** (no MAX3232 needed for 3.3V TTL loopback), running `olnk_esp32_server_start_task()` on UART2 backed by a FAT16 SD/RAM volume, and mounting it via `olnk_esp32_vfs_mount("/dos", ...)` over UART1 at 115200 bps!
 
 ### Option B — PlatformIO (`espressif32`)
 

@@ -294,6 +294,8 @@ class TestReleaseMetadataAndDosVerifier(unittest.TestCase):
                 self.assertIn("openlnk/pio_build.py", names)
                 self.assertIn("openlnk/src/openlnk_esp32.h", names)
                 self.assertIn("openlnk/src/esp32_hal_uart.c", names)
+                self.assertIn("openlnk/src/esp32_client.c", names)
+                self.assertIn("openlnk/src/esp32_client_vfs.c", names)
                 self.assertIn("openlnk/src/openlnk/version.h", names)
                 self.assertIn("openlnk/src/openlnk_core/server.c", names)
                 self.assertIn("openlnk/examples/sd_server_arduino/sd_server_arduino.ino", names)
