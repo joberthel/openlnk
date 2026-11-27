@@ -852,8 +852,8 @@ static bool posix_serial_configure(int fd, uint32_t bps) {
         return false;
     }
 
-    /* Pure POSIX 8N1 raw mode (no cfmakeraw dependency) */
-    tio.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
+    /* Pure POSIX 8N1 raw mode (no cfmakeraw dependency; keep framing-error bytes for 9600 resync) */
+    tio.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | IGNPAR | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
     tio.c_oflag &= (tcflag_t)~(OPOST);
     tio.c_lflag &= (tcflag_t)~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     tio.c_cflag &= (tcflag_t)~(CSIZE | PARENB | CSTOPB);
@@ -1055,6 +1055,7 @@ static int run_posix_server(
     uint8_t max_baud_idx,
     bool echo_mode,
     uint32_t pace_us,
+    uint32_t idle_timeout_ms,
     bool verbose,
     file_drive_set_t *drives
 ) {
@@ -1092,8 +1093,8 @@ static int run_posix_server(
     }
     srv.link.max_baud_idx = max_baud_idx;
     srv.link.local_requires_echo = echo_mode;
-    /* Auto-recover back to 9600 bps after 3 seconds of silence on high-baud links */
-    srv.idle_disconnect_ms = 3000UL;
+    /* Auto-recover back to 9600 bps after idle_timeout_ms of silence (0 = disabled) */
+    srv.idle_disconnect_ms = idle_timeout_ms;
     if (verbose) {
         olnk_server_set_event_callback(&srv, on_verbose_event, NULL);
     }
@@ -1168,6 +1169,7 @@ static void print_usage(void) {
     printf("  --read-only          Write-protect all attached drives (returns DOS error 0x8100)\n");
     printf("  --burst              Allow Burst (no-echo) frame reception (default: Echo-Paced)\n");
     printf("  --pace-us <us>       Per-byte TX delay in microseconds for --pipe mode (default: 0)\n");
+    printf("  --idle-timeout <ms>  Idle high-baud drop to 9600 bps in ms (default: 60000, 0=off)\n");
     printf("  --verbose, -v        Log sync, baud negotiation, and RPC events to stderr\n");
 }
 
@@ -1184,6 +1186,7 @@ int main(int argc, char **argv) {
     uint32_t max_baud = 115200UL;
     uint8_t max_baud_idx = (uint8_t)OLNK_BAUD_115200;
     uint32_t pace_us = 0UL;
+    uint32_t idle_timeout_ms = 60000UL;
     bool read_only = false;
     bool echo_mode = true;
     bool verbose = false;
@@ -1260,6 +1263,8 @@ int main(int argc, char **argv) {
             echo_mode = false;
         } else if ((strcmp(argv[i], "--pace-us") == 0) && ((i + 1) < argc)) {
             pace_us = (uint32_t)strtoul(argv[++i], NULL, 10);
+        } else if ((strcmp(argv[i], "--idle-timeout") == 0) && ((i + 1) < argc)) {
+            idle_timeout_ms = (uint32_t)strtoul(argv[++i], NULL, 10);
         } else if ((strcmp(argv[i], "--verbose") == 0) || (strcmp(argv[i], "-v") == 0)) {
             verbose = true;
         } else {
@@ -1293,6 +1298,7 @@ int main(int argc, char **argv) {
     (void)max_baud_idx;
     (void)echo_mode;
     (void)pace_us;
+    (void)idle_timeout_ms;
     (void)verbose;
     fprintf(stderr, "[opensvr] POSIX --port/--pipe server mode requires Linux or macOS.\n");
     file_drive_set_close(&drives);
@@ -1305,6 +1311,7 @@ int main(int argc, char **argv) {
             max_baud_idx,
             echo_mode,
             pace_us,
+            idle_timeout_ms,
             verbose,
             &drives
         );

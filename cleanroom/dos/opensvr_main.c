@@ -118,7 +118,7 @@ int OLNK_DOS_MAIN_FN(int argc, char **argv) {
 
     g_dos_server.link.max_baud_idx = max_baud_idx;
     g_dos_server.link.local_requires_echo = echo_mode;
-    g_dos_server.idle_disconnect_ms = 3000UL;
+    g_dos_server.idle_disconnect_ms = 60000UL;
     olnk_server_set_event_callback(&g_dos_server, on_dos_server_event, NULL);
 
     olnk_dos_puts("OPENSVR " OLNK_VERSION_STRING " ready on COM");
