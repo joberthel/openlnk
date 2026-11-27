@@ -6,10 +6,10 @@ This document tracks objective verification evidence against the 5-Stage Definit
 
 | Stage | Designation | Test ID | Required Evidence | Status | Verified Date | Reference / Trace |
 | :--- | :--- | :--- | :--- | :---: | :---: | :--- |
-| **Level 1** | Physical Link | `TC_LINK_01` | Successful handshake over COM port at all baud rates (`9600`, `19200`, `38400`, `57600`, `115200` bps) | `C99 LOOPBACK & PIPE VERIFIED (86Box Live PENDING)` | `2026-11-26` | `tests/traces/01_handshake_9600.hexlog.gz`, `02_handshake_115200.hexlog.gz`, `test_libopenlnk` |
-| **Level 2** | Discovery & Protocol | `TC_DISC_01` | Reliable enumeration of all remote drives (BPB/DPB/FAT12/FAT16) in MS-DOS 6.22 | `C99 LOOPBACK & PIPE VERIFIED (86Box Live PENDING)` | `2026-11-26` | `tests/traces/04_bpb_query_fat16.hexlog.gz`, `test_libopenlnk` |
-| **Level 3** | Raw Sector I/O | `TC_SEC_01` | Error-free reading and writing of 1,000 randomized sectors via Differential Oracle (86Box) | `C99 LOOPBACK VERIFIED (86Box Live PENDING)` | `2026-11-26` | `tests/traces/05_read_sector_single.hexlog.gz`, `06_write_sector_multi.hexlog.gz`, `test_libopenlnk` |
-| **Level 4** | High-Level DOS Workflows | `TC_DOS_01` | Successful execution of `DIR X:`, `COPY`, `FC /B`, `CHKDSK`, and `FORMAT` (V-FAT) | `PENDING` | — | Differential Oracle CI log |
+| **Level 1** | Physical Link | `TC_LINK_01` | Successful handshake over COM port at all baud rates (`9600`, `19200`, `38400`, `57600`, `115200` bps) | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/01_handshake_9600.hexlog.gz`, `02_handshake_115200.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
+| **Level 2** | Discovery & Protocol | `TC_DISC_01` | Reliable enumeration of all remote drives (BPB/DPB/FAT12/FAT16) in MS-DOS 6.22 | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/04_bpb_query_fat16.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
+| **Level 3** | Raw Sector I/O | `TC_SEC_01` | Error-free reading and writing of 1,000 randomized sectors via Differential Oracle (86Box) | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | `tests/traces/05_read_sector_single.hexlog.gz`, `06_write_sector_multi.hexlog.gz`, `opensvr --pipe` ↔ MS-DOS 6.22 `INTERLNK.EXE` |
+| **Level 4** | High-Level DOS Workflows | `TC_DOS_01` | Successful execution of `DIR X:`, `COPY`, `FC /B`, `CHKDSK`, and `FORMAT` (V-FAT) | `VERIFIED (86Box Live Oracle)` | `2026-11-27` | 86Box MS-DOS 6.22 `INTERLNK.EXE` ↔ clean-room `opensvr` live verification |
 | **Level 5** | Multi-Platform Parity | `TC_PLAT_01` | ESP32 serves FAT16 SD card over MAX3232 UART to real IBM PC/XT 5160 with zero transfer errors | `PENDING` | — | Hardware test log |
 
 ## 2. Golden Trace Capture & Verification Matrix (Agent A Ground Truth ↔ Agent B C99 Parity)
@@ -31,7 +31,7 @@ All 7 Golden Traces have been 100% deterministically decoded and verified (**774
 | Platform Target | Toolchain | Architectural Constraints | Build Status | Test Status |
 | :--- | :--- | :--- | :---: | :---: |
 | Linux x86_64 Desktop | GCC / Clang (`-std=c99 -Werror -pedantic`) | Zero `malloc`, Zero FP | `CONFIGURED (CI)` | `READY (CI)` |
-| macOS ARM64 Desktop | Apple Clang (`-std=c99 -Werror -pedantic -Wconversion`) | Zero `malloc`, Zero FP | `PASS` | `PASS (CTest, self-test, 24/24 parity, --pipe E2E)` |
+| macOS ARM64 Desktop | Apple Clang (`-std=c99 -Werror -pedantic -Wconversion`) | Zero `malloc`, Zero FP | `PASS` | `PASS (CTest, self-test, 24/24 parity, 86Box Live Oracle)` |
 | Windows x64 Desktop | MSVC (`/W4 /WX`) | Zero `malloc`, Zero FP | `CONFIGURED (CI, _WIN32 audited)` | `READY (CI)` |
 | MS-DOS 16-Bit Real-Mode | Open Watcom v2 (`-ms -0 -za99 -wx -we`) | 8086/8088 / NEC V30 | `STRICT C99 PASS (Watcom CI)` | `PENDING (86Box Live)` |
 | ESP32 Embedded | ESP-IDF 5.x / PlatformIO / Arduino | MAX3232 UART + SDMMC | `STRICT C99 PASS (Manifest Ready)` | `PENDING (HW)` |
@@ -41,5 +41,5 @@ All 7 Golden Traces have been 100% deterministically decoded and verified (**774
 - [x] **Gate 1 — Clean-Room Isolation:** Pre-commit hook & CI script enforce Agent A / Agent B separation and zero-alloc / zero-FP invariants (`tools/ci/check_cleanroom_isolation.py` PASS).
 - [x] **Gate 2 — Kaitai & JSON Vectors (24/24 Differential Parity):** Formal `specs/interlnk_wire.ksy` compiles cleanly (0 warnings) for Python & C++11 STL and passes **24/24** Kaitai ↔ C99 differential parity (`tests/harness/test_runner.py --require-kaitai --c-binary cleanroom/build/openlnk-vector-check`).
 - [x] **Gate 3 — Loopback, Named-Pipe & Fault-Injection (Real Protocol):** `libopenlnk` (`cleanroom/`) implements verified CRC-16/GENIBUS (`0x1D0F`), Phase A/B/C link state machine, Echo vs Burst pacing, >8192 B fragmentation, FAT12/FAT16/MBR/VHD storage, and Zero-Alloc server engine; verified via `ctest`, `opensvr --self-test`, and live POSIX `--pipe` E2E test.
-- [ ] **Gate 4 — Differential Oracle (86Box Headless):** Original MS-DOS 6.22 `INTERLNK.EXE` client verified end-to-end against `opensvr` (`opensvr --pipe ... --image ...`).
+- [x] **Gate 4 — Differential Oracle (86Box Live):** Original MS-DOS 6.22 `INTERLNK.EXE` client verified live end-to-end against clean-room `opensvr` (`--pipe` + Fixed-Size VHD/MBR FAT16 image, 115200 bps step-up, `DIR`, `CHKDSK`, `COPY`, `FC /B`).
 - [ ] **Gate 5 — Hardware Parity Sign-Off:** Real IBM PC/XT 5160 + ESP32 SD card soak test signed off.
