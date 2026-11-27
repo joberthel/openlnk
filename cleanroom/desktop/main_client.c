@@ -278,10 +278,13 @@ static bool posix_serial_configure(int fd, uint32_t bps) {
     if (tcgetattr(fd, &tio) != 0) {
         return false;
     }
-    tio.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
+    tio.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | IGNPAR | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
     tio.c_oflag &= (tcflag_t)~(OPOST);
     tio.c_lflag &= (tcflag_t)~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     tio.c_cflag &= (tcflag_t)~(CSIZE | PARENB | CSTOPB);
+#ifdef CRTSCTS
+    tio.c_cflag &= (tcflag_t)~CRTSCTS;
+#endif
     tio.c_cflag |= (tcflag_t)(CS8 | CLOCAL | CREAD);
     tio.c_cc[VMIN] = 0U;
     tio.c_cc[VTIME] = 0U;
