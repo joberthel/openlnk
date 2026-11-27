@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/joberthel/openlnk/compare/v0.3.1...v0.3.2) (2026-11-27)
+
+
+### Performance Improvements
+
+* **core:** compact C99 link, client, and protocol codegen and stack usage ([18926a8](https://github.com/joberthel/openlnk/commit/18926a8e0c9bfd1a9518578e38ba43e22a479c74))
+* **dos:** reduce OPENLNK.SYS resident RAM from 26.23 KiB to 13.67 KiB ([5979e36](https://github.com/joberthel/openlnk/commit/5979e362141ebd9ca0c89917d83716c0e25d9f76))
+
 ## [0.3.1](https://github.com/joberthel/openlnk/compare/v0.3.0...v0.3.1) (2026-11-27)
 
 
