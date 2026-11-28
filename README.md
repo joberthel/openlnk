@@ -44,6 +44,8 @@ Full stage-by-stage verification evidence (`TC_LINK_01` through `TC_PLAT_01`) an
 - **Speed:** Both sides always establish Phase A sync at **9600 bps (`8N1`)**, then automatically step up (`9600 → 19200 → 38400 → 57600 → 115200` bps) with a 15-pair line quality check. On vintage 8250/16450 UARTs without a 16550A FIFO, cap the ceiling with `--baud 9600` / `/BAUD:9600` (or `19200`).
 
 > Prebuilt binaries for macOS, Linux, Windows, 16-bit MS-DOS (`openlnk-vX.Y.Z-dos16.zip`), and ESP32 Arduino/PlatformIO (`openlnk-vX.Y.Z-arduino-esp32.zip`) are published on [GitHub Releases](https://github.com/joberthel/openlnk/releases). To build from source first, see [Build, Tests, and CI](#build-tests-and-ci).
+>
+> **macOS note:** The `macos-universal` binaries are ad-hoc signed (not Apple-notarized). If you download the `.tar.gz` in a browser, clear macOS's download attributes before extracting so Gatekeeper does not stall execution: `xattr -c openlnk-vX.Y.Z-macos-universal.tar.gz && tar -xzf openlnk-vX.Y.Z-macos-universal.tar.gz` (or download via `gh release download` / `curl`).
 
 ### Scenario A: Modern OS as Server ↔ MS-DOS Client (`OPENLNK.SYS` or `INTERLNK.EXE`)
 

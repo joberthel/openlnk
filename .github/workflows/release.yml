@@ -215,7 +215,7 @@ jobs:
       - name: Build libopenlnk & desktop CLIs
         run: cmake --build cleanroom/build --config Release
 
-      - name: Verify macOS Universal Mach-O slices
+      - name: Ad-hoc sign & verify macOS Universal Mach-O slices
         if: ${{ matrix.target == 'macos-universal' }}
         run: |
           for bin in cleanroom/build/opensvr cleanroom/build/openlnk; do
@@ -223,6 +223,8 @@ jobs:
             echo "$bin: $archs"
             echo "$archs" | grep -qw "arm64"
             echo "$archs" | grep -qw "x86_64"
+            codesign --force --sign - "$bin"
+            codesign -vvv --strict "$bin"
           done
 
       - name: Run C99 unit tests
